@@ -2,8 +2,12 @@ using EntraInjectorProxy;
 using Yarp.ReverseProxy.Transforms;
 
 var appName = "EntraInjectorProxy";
-var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-var configDir = Path.Combine(userProfile, ".config", appName);
+var configDir = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_CONFIG_DIR");
+if (string.IsNullOrWhiteSpace(configDir))
+{
+    var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    configDir = Path.Combine(userProfile, ".config", appName);
+}
 var configPath = Path.Combine(configDir, "settings.json");
 
 Directory.CreateDirectory(configDir);
