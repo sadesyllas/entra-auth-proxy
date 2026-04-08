@@ -1,12 +1,11 @@
 using EntraInjectorProxy;
 using Yarp.ReverseProxy.Transforms;
 
-var appName = "EntraInjectorProxy";
 var configDir = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_CONFIG_DIR");
 if (string.IsNullOrWhiteSpace(configDir))
 {
     var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    configDir = Path.Combine(userProfile, ".config", appName);
+    configDir = Path.Combine(userProfile, ".config", "entrainjectorproxy");
 }
 var configPath = Path.Combine(configDir, "settings.json");
 
@@ -38,6 +37,9 @@ if (!File.Exists(configPath))
           ""destination1"": {
             ""Address"": ""https://api.openai.com/""
           }
+        },
+        ""HttpClient"": {
+          ""DangerousAcceptAnyServerCertificate"": false
         }
       }
     }
