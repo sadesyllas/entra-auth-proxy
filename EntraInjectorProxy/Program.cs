@@ -1,17 +1,32 @@
 using EntraInjectorProxy;
 using Yarp.ReverseProxy.Transforms;
 
-var configDir = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_CONFIG_DIR");
-if (string.IsNullOrWhiteSpace(configDir))
+var configFileName = "entrainjectorproxy.json";
+var envConfigDir = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_CONFIG_DIR");
+var localConfigPath = Path.Combine(Directory.GetCurrentDirectory(), configFileName);
+
+string globalConfigDir;
+
+bool isEnvSet = !string.IsNullOrWhiteSpace(envConfigDir);
+
+if (isEnvSet)
+{
+    globalConfigDir = envConfigDir!;
+}
+else
 {
     var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    configDir = Path.Combine(userProfile, ".config", "entrainjectorproxy");
+    globalConfigDir = Path.Combine(userProfile, ".config", "entrainjectorproxy");
 }
-var configPath = Path.Combine(configDir, "settings.json");
 
-Directory.CreateDirectory(configDir);
+string globalConfigPath = Path.Combine(globalConfigDir, configFileName);
 
-if (!File.Exists(configPath))
+Directory.CreateDirectory(globalConfigDir);
+
+bool envOrGlobalExists = File.Exists(globalConfigPath);
+bool localExists = !isEnvSet && File.Exists(localConfigPath);
+
+if (!envOrGlobalExists && !localExists)
 {
     var defaultConfig = @"{
   ""EntraAuth"": {
@@ -19,40 +34,34 @@ if (!File.Exists(configPath))
     ""ClientId"": """",
     ""TargetScope"": ""api://<app-id>/.default""
   },
-  ""ReverseProxy"": {
-    ""Routes"": {
-      ""catch-all"": {
-        ""ClusterId"": ""target-cluster"",
-        ""Match"": {
-          ""Path"": ""{**catch-all}""
-        },
-        ""Metadata"": {
-            ""VirtualKey"": ""optional-virtual-key""
-        }
-      }
-    },
-    ""Clusters"": {
-      ""target-cluster"": {
-        ""Destinations"": {
-          ""destination1"": {
-            ""Address"": ""https://api.openai.com/""
-          }
-        },
-        ""HttpClient"": {
-          ""DangerousAcceptAnyServerCertificate"": false
-        }
-      }
-    }
-  }
+  ""TargetAddress"": ""https://api.<provider>.com/"",
+  ""Port"": 5000,
+  ""RedirectPort"": 5000,
+  ""DangerousAcceptAnyServerCertificate"": false
 }";
-    File.WriteAllText(configPath, defaultConfig);
-    Console.WriteLine($"Created default configuration at {configPath}. Please update it with your ClientId and TargetScope, then restart.");
+    File.WriteAllText(globalConfigPath, defaultConfig);
+    Console.WriteLine($"Created default configuration at {globalConfigPath}. Please update it with your ClientId and TargetScope, then restart.");
     return;
 }
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.Sources.Clear();
-builder.Configuration.AddJsonFile(configPath, optional: false, reloadOnChange: true);
+
+if (envOrGlobalExists)
+{
+    builder.Configuration.AddJsonFile(globalConfigPath, optional: false, reloadOnChange: true);
+}
+
+if (!isEnvSet && localExists)
+{
+    builder.Configuration.AddJsonFile(localConfigPath, optional: false, reloadOnChange: true);
+}
+
+var portStr = builder.Configuration["Port"];
+if (!string.IsNullOrEmpty(portStr) && int.TryParse(portStr, out var port))
+{
+    builder.WebHost.UseUrls($"http://*:{port}");
+}
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
@@ -62,13 +71,24 @@ builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 var tokenProvider = new TokenProvider();
 builder.Services.AddSingleton(tokenProvider);
 
-var msalApp = await AuthExtensions.BuildAndAuthenticateAsync(configDir, builder.Configuration, tokenProvider);
+var msalApp = await AuthExtensions.BuildAndAuthenticateAsync(globalConfigDir, builder.Configuration, tokenProvider);
 builder.Services.AddSingleton(msalApp);
 
 builder.Services.AddHostedService<TokenRefreshService>();
 
+var yarpConfig = new ConfigurationBuilder()
+    .AddInMemoryCollection(new Dictionary<string, string?> {
+        {"Routes:catch-all:ClusterId", "target-cluster"},
+        {"Routes:catch-all:Match:Path", "{**catch-all}"},
+        {"Routes:catch-all:Metadata:VirtualKey", builder.Configuration["VirtualKey"] ?? string.Empty},
+        {"Clusters:target-cluster:Destinations:destination1:Address", builder.Configuration["TargetAddress"] ?? string.Empty},
+        {"Clusters:target-cluster:HttpClient:DangerousAcceptAnyServerCertificate", builder.Configuration["DangerousAcceptAnyServerCertificate"] ?? "false"}
+    })
+    .AddConfiguration(builder.Configuration.GetSection("ReverseProxy"))
+    .Build();
+
 builder.Services.AddReverseProxy()
-    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
+    .LoadFromConfig(yarpConfig)
     .AddTransforms(builderContext =>
     {
         builderContext.AddRequestTransform(transformContext =>
@@ -84,7 +104,8 @@ builder.Services.AddReverseProxy()
             var metadata = proxyFeature?.Route?.Config?.Metadata;
 
             if (metadata != null && 
-                metadata.TryGetValue("VirtualKey", out var virtualKey))
+                metadata.TryGetValue("VirtualKey", out var virtualKey) &&
+                !string.IsNullOrWhiteSpace(virtualKey))
             {
                 transformContext.ProxyRequest.Headers.TryAddWithoutValidation("x-bf-vk", virtualKey);
             }
