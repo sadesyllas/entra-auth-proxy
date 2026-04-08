@@ -52,6 +52,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.Sources.Clear();
 builder.Configuration.AddJsonFile(configPath, optional: false, reloadOnChange: true);
 
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.SetMinimumLevel(LogLevel.Information);
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
 var tokenProvider = new TokenProvider();
 builder.Services.AddSingleton(tokenProvider);
 
