@@ -92,7 +92,12 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
     }
 
     builder.Logging.ClearProviders();
-    builder.Logging.AddConsole();
+    builder.Logging.AddSimpleConsole(options =>
+    {
+        options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
+        options.UseUtcTimestamp = true;
+        options.SingleLine = true;
+    });
     builder.Logging.SetMinimumLevel(LogLevel.Information);
     builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
