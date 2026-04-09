@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.Identity.Client" />
     <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" />
     <PackageReference Include="Yarp.ReverseProxy" />
+    <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
 </Project>
