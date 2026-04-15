@@ -45,7 +45,7 @@ public static class AuthExtensions
         var scopes = new[] { targetScope };
         AuthenticationResult result;
 
-        bool forceInteractive = Environment.GetEnvironmentVariable("ENTRAINJECTPROXY_FORCE_INTERACTIVE")?.ToLowerInvariant() == "true";
+        bool forceInteractive = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_FORCE_INTERACTIVE")?.ToLowerInvariant() == "true";
 
         if (forceInteractive)
         {
