@@ -8,5 +8,6 @@
   "VirtualKey": "",
   "Port": 5000,
   "RedirectPort": 5000,
-  "DangerousAcceptAnyServerCertificate": false
+  "DangerousAcceptAnyServerCertificate": false,
+  "ForceInteractiveAuthentication": false
 }

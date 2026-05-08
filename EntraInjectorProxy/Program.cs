@@ -67,7 +67,8 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
   ""TargetAddress"": ""https://api.<provider>.com/"",
   ""Port"": 5000,
   ""RedirectPort"": 5000,
-  ""DangerousAcceptAnyServerCertificate"": false
+  ""DangerousAcceptAnyServerCertificate"": false,
+  ""ForceInteractiveAuthentication"": false
 }";
             File.WriteAllText(globalConfigPath, defaultConfig);
             Console.WriteLine($"Created default configuration at {globalConfigPath}. Please update it with your ClientId and TargetScope, then restart.");
