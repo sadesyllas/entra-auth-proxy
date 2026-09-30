@@ -2,7 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Identity.Client;
 
-namespace EntraInjectorProxy;
+namespace EntraAuthProxy;
 
 public class TokenRefreshService : BackgroundService
 {

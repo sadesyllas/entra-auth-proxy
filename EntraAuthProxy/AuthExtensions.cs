@@ -4,7 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Client.Extensions.Msal;
 
-namespace EntraInjectorProxy;
+namespace EntraAuthProxy;
 
 public static class AuthExtensions 
 {
@@ -37,7 +37,7 @@ public static class AuthExtensions
         var cacheKeyString = $"{tenantId}_{clientId}_{targetScope}";
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(cacheKeyString));
         var hashString = Convert.ToHexString(hashBytes).ToLowerInvariant();
-        var cacheFileName = $"EntraInjectorProxy_{hashString}";
+        var cacheFileName = $"EntraAuthProxy_{hashString}";
 
         var cacheHelper = await CreateCacheHelperAsync(configDir, cacheFileName);
         cacheHelper.RegisterCache(app.UserTokenCache);
@@ -45,7 +45,7 @@ public static class AuthExtensions
         var scopes = new[] { targetScope };
         AuthenticationResult result;
 
-        var envVar = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_FORCE_INTERACTIVE");
+        var envVar = Environment.GetEnvironmentVariable("ENTRAAUTHPROXY_FORCE_INTERACTIVE");
         bool forceInteractive = envVar != null
             ? envVar.ToLowerInvariant() == "true"
             : configuration.GetValue<bool>("ForceInteractiveAuthentication");
@@ -75,9 +75,9 @@ public static class AuthExtensions
     private static async Task<MsalCacheHelper> CreateCacheHelperAsync(string configDir, string cacheFileName)
     {
         var storageProperties = new StorageCreationPropertiesBuilder(cacheFileName, configDir)
-            .WithMacKeyChain("EntraInjectorProxy", cacheFileName)
+            .WithMacKeyChain("EntraAuthProxy", cacheFileName)
             .WithLinuxKeyring(cacheFileName, "default", cacheFileName, 
-                new KeyValuePair<string, string>("MsalClientID", "EntraInjectorProxy"),
+                new KeyValuePair<string, string>("MsalClientID", "EntraAuthProxy"),
                 new KeyValuePair<string, string>("MsalClientVersion", "1.0.0.0"))
             .Build();
 

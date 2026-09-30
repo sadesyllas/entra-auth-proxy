@@ -1,4 +1,4 @@
-# EntraInjectorProxy
+# EntraAuthProxy
 
 A small .NET reverse proxy that signs you in with Microsoft Entra ID and adds your access token to requests sent to an upstream API. It lets CLI tools and IDEs use Entra-protected APIs without implementing interactive Entra authentication themselves.
 
@@ -11,10 +11,10 @@ You need the **.NET 10 SDK**, an upstream API URL, and an Entra public-client ap
 From the repository root:
 
 ```sh
-cp sample-entrainjectorproxy.json entrainjectorproxy.json
+cp sample-entraauthproxy.json entraauthproxy.json
 ```
 
-Edit `entrainjectorproxy.json` with your actual values:
+Edit `entraauthproxy.json` with your actual values:
 
 ```json
 {
@@ -34,7 +34,7 @@ Edit `entrainjectorproxy.json` with your actual values:
 Start the proxy:
 
 ```sh
-dotnet run --project EntraInjectorProxy --no-launch-profile -- --config "$PWD/entrainjectorproxy.json"
+dotnet run --project EntraAuthProxy --no-launch-profile -- --config "$PWD/entraauthproxy.json"
 ```
 
 `dotnet run` restores dependencies and builds automatically. `--no-launch-profile` bypasses the repository's developer-specific launch settings. The commands above use a POSIX shell; in PowerShell, use `Copy-Item` to copy the sample and pass the configuration's absolute path to `--config`.
@@ -85,12 +85,12 @@ Package versions are centrally declared in `Directory.Packages.props`.
 
 | File | Purpose |
 | --- | --- |
-| `EntraInjectorProxy/Program.cs` | CLI options, configuration loading, authentication, and host setup |
-| `EntraInjectorProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token transform |
-| `EntraInjectorProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
-| `EntraInjectorProxy/TokenProvider.cs` | Shared in-memory access token |
-| `EntraInjectorProxy/TokenRefreshService.cs` | Periodic silent token acquisition |
-| `sample-entrainjectorproxy.json` | Starter configuration |
+| `EntraAuthProxy/Program.cs` | CLI options, configuration loading, authentication, and host setup |
+| `EntraAuthProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token transform |
+| `EntraAuthProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
+| `EntraAuthProxy/TokenProvider.cs` | Shared in-memory access token |
+| `EntraAuthProxy/TokenRefreshService.cs` | Periodic silent token acquisition |
+| `sample-entraauthproxy.json` | Starter configuration |
 
 ## Configuration
 
@@ -99,12 +99,12 @@ The application clears the standard ASP.NET Core configuration sources and loads
 Configuration is selected as follows:
 
 1. **Explicit file:** `--config /absolute/path/settings.json` (or `-c`) loads only that file. A missing explicit file is an error.
-2. **Environment-selected directory:** without `--config`, setting `ENTRAINJECTORPROXY_CONFIG_DIR` loads `entrainjectorproxy.json` from that directory and disables current-directory configuration lookup.
-3. **Default locations:** otherwise, the application loads `~/.config/entrainjectorproxy/entrainjectorproxy.json`, then overlays `entrainjectorproxy.json` from the current working directory if present. Local values take precedence.
+2. **Environment-selected directory:** without `--config`, setting `ENTRAAUTHPROXY_CONFIG_DIR` loads `entraauthproxy.json` from that directory and disables current-directory configuration lookup.
+3. **Default locations:** otherwise, the application loads `~/.config/entraauthproxy/entraauthproxy.json`, then overlays `entraauthproxy.json` from the current working directory if present. Local values take precedence.
 
-If no configuration file is found through automatic lookup, the application creates a starter file in the selected global directory and exits. Edit it and restart. On Windows, `~` denotes the user profile too, so the default directory is `<UserProfile>\.config\entrainjectorproxy`.
+If no configuration file is found through automatic lookup, the application creates a starter file in the selected global directory and exits. Edit it and restart. On Windows, `~` denotes the user profile too, so the default directory is `<UserProfile>\.config\entraauthproxy`.
 
-The token cache always uses `ENTRAINJECTORPROXY_CONFIG_DIR` when set, or `~/.config/entrainjectorproxy` otherwise. Selecting an explicit configuration file does **not** move the token cache next to that file.
+The token cache always uses `ENTRAAUTHPROXY_CONFIG_DIR` when set, or `~/.config/entraauthproxy` otherwise. Selecting an explicit configuration file does **not** move the token cache next to that file.
 
 | Setting | Meaning |
 | --- | --- |
@@ -118,7 +118,7 @@ The token cache always uses `ENTRAINJECTORPROXY_CONFIG_DIR` when set, or `~/.con
 | `ForceInteractiveAuthentication` | Forces browser authentication at startup when `true`. |
 | `ReverseProxy` | Optional YARP configuration layered over the generated routes and clusters. |
 
-`ENTRAINJECTORPROXY_FORCE_INTERACTIVE` overrides `ForceInteractiveAuthentication` when present: only the value `true` (case-insensitive) enables it; any other value disables it.
+`ENTRAAUTHPROXY_FORCE_INTERACTIVE` overrides `ForceInteractiveAuthentication` when present: only the value `true` (case-insensitive) enables it; any other value disables it.
 
 `Port` and `RedirectPort` can be equal because startup authentication happens before Kestrel begins listening. Ensure the callback port is available during sign-in. Although JSON files are loaded with change watching enabled, several values are captured during startup; restart after configuration changes to apply them consistently.
 
@@ -146,11 +146,11 @@ With this route, `/premium/v1/models` forwards as `/v1/models`. The Entra bearer
 ## Build and publish
 
 ```sh
-dotnet build EntraInjectorProxy.sln
-dotnet publish EntraInjectorProxy/EntraInjectorProxy.csproj -c Release -r <runtime-identifier> --self-contained true -o ./publish
+dotnet build EntraAuthProxy.sln
+dotnet publish EntraAuthProxy/EntraAuthProxy.csproj -c Release -r <runtime-identifier> --self-contained true -o ./publish
 ```
 
-Replace `<runtime-identifier>` with your target, for example `osx-arm64`, `linux-x64`, or `win-x64`. The project enables single-file publishing and names the executable `entrainjectorproxy` (`entrainjectorproxy.exe` on Windows). Build output otherwise uses the repository's `artifacts` layout.
+Replace `<runtime-identifier>` with your target, for example `osx-arm64`, `linux-x64`, or `win-x64`. The project enables single-file publishing and names the executable `entraauthproxy` (`entraauthproxy.exe` on Windows). Build output otherwise uses the repository's `artifacts` layout.
 
 To run the local verification after a default Debug build (the repository check requires Python 3):
 
@@ -164,7 +164,7 @@ The harness uses loopback proxy/upstream listeners and a deterministic token. It
 Run the published executable with the same configuration option:
 
 ```sh
-./publish/entrainjectorproxy --config /absolute/path/entrainjectorproxy.json
+./publish/entraauthproxy --config /absolute/path/entraauthproxy.json
 ```
 
 ## Troubleshooting

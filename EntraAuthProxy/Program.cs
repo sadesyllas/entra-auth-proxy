@@ -1,11 +1,11 @@
 using System.CommandLine;
-using EntraInjectorProxy;
+using EntraAuthProxy;
 
 var configOption = new Option<FileInfo?>(
     aliases: new[] { "-c", "--config" },
     description: "The path to an explicit configuration file.");
 
-var rootCommand = new RootCommand("Entra ID Injector Proxy")
+var rootCommand = new RootCommand("Entra ID Auth Proxy")
 {
     configOption
 };
@@ -21,8 +21,8 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
         return;
     }
 
-    var configFileName = "entrainjectorproxy.json";
-    var envConfigDir = Environment.GetEnvironmentVariable("ENTRAINJECTORPROXY_CONFIG_DIR");
+    var configFileName = "entraauthproxy.json";
+    var envConfigDir = Environment.GetEnvironmentVariable("ENTRAAUTHPROXY_CONFIG_DIR");
     var localConfigPath = Path.Combine(Directory.GetCurrentDirectory(), configFileName);
 
     string globalConfigDir;
@@ -36,7 +36,7 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
     else
     {
         var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        globalConfigDir = Path.Combine(userProfile, ".config", "entrainjectorproxy");
+        globalConfigDir = Path.Combine(userProfile, ".config", "entraauthproxy");
     }
 
     string globalConfigPath = Path.Combine(globalConfigDir, configFileName);

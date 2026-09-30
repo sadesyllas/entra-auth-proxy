@@ -1,4 +1,4 @@
-namespace EntraInjectorProxy;
+namespace EntraAuthProxy;
 
 public class TokenProvider
 {

@@ -8,7 +8,8 @@
       "applicationUrl": "http://localhost:5038",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
-      }
+      },
+      "commandLineArgs": "-c /home/bellerophon/src/EntraAuthProxy/artifacts/llm.json"
     },
     "https": {
       "commandName": "Project",

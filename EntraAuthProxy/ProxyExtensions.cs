@@ -1,6 +1,6 @@
 using Yarp.ReverseProxy.Transforms;
 
-namespace EntraInjectorProxy;
+namespace EntraAuthProxy;
 
 public static class ProxyExtensions
 {

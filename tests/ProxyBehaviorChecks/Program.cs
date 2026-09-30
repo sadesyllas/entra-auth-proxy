@@ -1,6 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
-using EntraInjectorProxy;
+using EntraAuthProxy;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using ProxyBehaviorChecks;
