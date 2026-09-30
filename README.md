@@ -1,6 +1,6 @@
 # EntraInjectorProxy
 
-A small .NET reverse proxy that signs you in with Microsoft Entra ID and adds your access token to requests sent to an upstream API. It lets CLI tools and IDEs use Entra-protected LLM gateways, such as Bifrost Enterprise, without implementing interactive Entra authentication themselves.
+A small .NET reverse proxy that signs you in with Microsoft Entra ID and adds your access token to requests sent to an upstream API. It lets CLI tools and IDEs use Entra-protected APIs without implementing interactive Entra authentication themselves.
 
 Your client talks to the proxy using the upstream API's existing request format. The proxy handles sign-in, token caching, background renewal, and forwarding. The upstream gateway remains responsible for authorization, model access, budgets, and rate limits.
 
@@ -24,7 +24,6 @@ Edit `entrainjectorproxy.json` with your actual values:
     "TargetScope": "api://<upstream-api-app-id>/.default"
   },
   "TargetAddress": "https://<your-gateway>/",
-  "VirtualKey": "",
   "Port": 5000,
   "RedirectPort": 5000,
   "DangerousAcceptAnyServerCertificate": false,
@@ -53,7 +52,7 @@ The example endpoint must exist on your upstream. The proxy supplies the Entra b
 ## How it works
 
 ```text
-CLI / IDE ──HTTP──> Kestrel + YARP ──Bearer token + optional x-bf-vk──> Upstream API
+CLI / IDE ──HTTP──> Kestrel + YARP ──Bearer token──> Upstream API
                          ▲
                    TokenProvider
                          ▲
@@ -67,11 +66,9 @@ CLI / IDE ──HTTP──> Kestrel + YARP ──Bearer token + optional x-bf-vk
 3. **Persist the session.** MSAL Extensions registers a persistent token cache using OS-protected storage: Windows protection, macOS Keychain, or Linux Keyring. Cache persistence is verified during startup. The cache name contains a SHA-256 hash of the tenant ID, client ID, and target scope, separating those authentication configurations.
 4. **Keep a token ready.** The singleton `TokenProvider` stores the access token with `Volatile.Read` and `Volatile.Write`, allowing concurrent requests to read the current token without an explicit lock.
 5. **Refresh in the background.** `TokenRefreshService` calls MSAL's `AcquireTokenSilent` every 30 seconds and updates the token when successful. MSAL decides whether to reuse its cached token or obtain a new one; the proxy does not implement its own expiry threshold. Individual proxied requests do not initiate authentication.
-6. **Forward requests.** YARP's default catch-all route forwards requests to `TargetAddress`. A request transform replaces `Authorization` with `Bearer <access-token>`. If the matched route has nonempty `VirtualKey` metadata, it also adds an `x-bf-vk` header.
+6. **Forward requests.** YARP's default catch-all route forwards requests to `TargetAddress`. A request transform replaces `Authorization` with `Bearer <access-token>`.
 
 The application does not parse or translate LLM payloads or implement model-specific endpoints. YARP handles HTTP forwarding, and API compatibility depends on the upstream service. Use a scope for the **upstream API**, rather than an unrelated resource such as Microsoft Graph, so the token targets the intended service.
-
-For Bifrost integrations, the optional virtual key identifies the key to send upstream. Token validation, identity-to-key mapping, and access policy enforcement depend on your Bifrost deployment; this proxy does not implement them.
 
 ## Stack and source layout
 
@@ -88,7 +85,8 @@ Package versions are centrally declared in `Directory.Packages.props`.
 
 | File | Purpose |
 | --- | --- |
-| `EntraInjectorProxy/Program.cs` | CLI options, configuration loading, host setup, YARP routes, and header transforms |
+| `EntraInjectorProxy/Program.cs` | CLI options, configuration loading, authentication, and host setup |
+| `EntraInjectorProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token transform |
 | `EntraInjectorProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
 | `EntraInjectorProxy/TokenProvider.cs` | Shared in-memory access token |
 | `EntraInjectorProxy/TokenRefreshService.cs` | Periodic silent token acquisition |
@@ -114,7 +112,6 @@ The token cache always uses `ENTRAINJECTORPROXY_CONFIG_DIR` when set, or `~/.con
 | `EntraAuth.ClientId` | Public-client application ID used for sign-in. |
 | `EntraAuth.TargetScope` | Single scope requested for the upstream API, such as `api://<app-id>/.default`. |
 | `TargetAddress` | Upstream base URL for the generated catch-all route. |
-| `VirtualKey` | Optional `x-bf-vk` value for the generated route; blank omits injection. |
 | `Port` | Proxy HTTP listening port; the sample uses `5000`. Binds all interfaces. |
 | `RedirectPort` | Local browser sign-in callback port. Falls back to `Port` when omitted. |
 | `DangerousAcceptAnyServerCertificate` | Disables upstream TLS certificate validation when `true`; leave `false` for normal use. |
@@ -129,7 +126,7 @@ The token cache always uses `ENTRAINJECTORPROXY_CONFIG_DIR` when set, or `~/.con
 
 By default, the proxy creates a route named `catch-all` matching `{**catch-all}` and a cluster named `target-cluster` with one destination. A `ReverseProxy` section can override these entries or add routes and clusters. Added routes coexist with the generated catch-all route.
 
-For example, add the following top-level section to send `/premium/...` through the same upstream using a different virtual key and remove the `/premium` prefix before forwarding:
+For example, add the following top-level section to send `/premium/...` through the same upstream and remove the `/premium` prefix before forwarding:
 
 ```json
 "ReverseProxy": {
@@ -138,14 +135,13 @@ For example, add the following top-level section to send `/premium/...` through 
       "ClusterId": "target-cluster",
       "Order": -1,
       "Match": { "Path": "/premium/{**catch-all}" },
-      "Metadata": { "VirtualKey": "<premium-virtual-key>" },
       "Transforms": [ { "PathRemovePrefix": "/premium" } ]
     }
   }
 }
 ```
 
-With this route, `/premium/v1/models` forwards as `/v1/models`. The Entra bearer-token transform applies to all configured routes. Virtual-key injection is based on each matched route's metadata; additional routes do not automatically inherit the top-level `VirtualKey`.
+With this route, `/premium/v1/models` forwards as `/v1/models`. The Entra bearer-token transform applies to all configured routes.
 
 ## Build and publish
 
@@ -155,6 +151,15 @@ dotnet publish EntraInjectorProxy/EntraInjectorProxy.csproj -c Release -r <runti
 ```
 
 Replace `<runtime-identifier>` with your target, for example `osx-arm64`, `linux-x64`, or `win-x64`. The project enables single-file publishing and names the executable `entrainjectorproxy` (`entrainjectorproxy.exe` on Windows). Build output otherwise uses the repository's `artifacts` layout.
+
+To run the local verification after a default Debug build (the repository check requires Python 3):
+
+```sh
+dotnet run --project tests/ProxyBehaviorChecks --no-build --no-launch-profile
+python3 tests/verify_repository.py
+```
+
+The harness uses loopback proxy/upstream listeners and a deterministic token. It checks routing, authorization replacement, header and payload forwarding without Entra credentials. The Python check validates configuration examples, starter generation, and the maintained-file inventory.
 
 Run the published executable with the same configuration option:
 
@@ -168,5 +173,5 @@ Run the published executable with the same configuration option:
 - **Browser sign-in or consent fails:** check the tenant, public-client app registration, loopback redirect URI, and permission/consent for the target API scope.
 - **Token-cache persistence fails:** check access to the configuration directory and OS credential storage. Linux requires a usable keyring; the application has no plaintext-cache fallback.
 - **Requests fail after a previously working session:** background refresh catches errors and retries on later ticks, retaining the previous token. It does not prompt for login or log refresh failures. If renewed interaction is required, restart with forced interactive authentication.
-- **The upstream returns 401 or 403:** check that the scope targets that API and that the signed-in user has the required upstream permissions and virtual-key access.
+- **The upstream returns 401 or 403:** check that the scope targets that API and that the signed-in user has the required upstream permissions.
 - **An address is already in use:** check both the proxy port and browser callback port, and update configuration as needed.

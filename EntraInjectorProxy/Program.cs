@@ -1,6 +1,5 @@
 using System.CommandLine;
 using EntraInjectorProxy;
-using Yarp.ReverseProxy.Transforms;
 
 var configOption = new Option<FileInfo?>(
     aliases: new[] { "-c", "--config" },
@@ -113,43 +112,7 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
 
     builder.Services.AddHostedService<TokenRefreshService>();
 
-    var yarpConfig = new ConfigurationBuilder()
-        .AddInMemoryCollection(new Dictionary<string, string?> {
-            {"Routes:catch-all:ClusterId", "target-cluster"},
-            {"Routes:catch-all:Match:Path", "{**catch-all}"},
-            {"Routes:catch-all:Metadata:VirtualKey", builder.Configuration["VirtualKey"] ?? string.Empty},
-            {"Clusters:target-cluster:Destinations:destination1:Address", builder.Configuration["TargetAddress"] ?? string.Empty},
-            {"Clusters:target-cluster:HttpClient:DangerousAcceptAnyServerCertificate", builder.Configuration["DangerousAcceptAnyServerCertificate"] ?? "false"}
-        })
-        .AddConfiguration(builder.Configuration.GetSection("ReverseProxy"))
-        .Build();
-
-    builder.Services.AddReverseProxy()
-        .LoadFromConfig(yarpConfig)
-        .AddTransforms(builderContext =>
-        {
-            builderContext.AddRequestTransform(transformContext =>
-            {
-                var provider = transformContext.HttpContext.RequestServices.GetRequiredService<TokenProvider>();
-                var token = provider.GetToken();
-                if (!string.IsNullOrEmpty(token))
-                {
-                    transformContext.ProxyRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-                }
-
-                var proxyFeature = transformContext.HttpContext.GetReverseProxyFeature();
-                var metadata = proxyFeature?.Route?.Config?.Metadata;
-
-                if (metadata != null && 
-                    metadata.TryGetValue("VirtualKey", out var virtualKey) &&
-                    !string.IsNullOrWhiteSpace(virtualKey))
-                {
-                    transformContext.ProxyRequest.Headers.TryAddWithoutValidation("x-bf-vk", virtualKey);
-                }
-
-                return ValueTask.CompletedTask;
-            });
-        });
+    builder.Services.AddTokenInjectingProxy(builder.Configuration);
 
     var app = builder.Build();
     app.MapReverseProxy();

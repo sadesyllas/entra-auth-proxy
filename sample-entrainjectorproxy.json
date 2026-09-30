@@ -5,7 +5,6 @@
     "TargetScope": "api://<app-id>/.default"
   },
   "TargetAddress": "https://api.<provider>.com/",
-  "VirtualKey": "",
   "Port": 5000,
   "RedirectPort": 5000,
   "DangerousAcceptAnyServerCertificate": false,
