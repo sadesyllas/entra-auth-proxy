@@ -1,6 +1,6 @@
 {
   "EntraAuth": {
-    "TenantId": "organizations",
+    "TenantId": "Entra tenant ID",
     "ClientId": "",
     "TargetScope": "api://<app-id>/.default"
   },
