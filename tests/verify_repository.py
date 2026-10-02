@@ -4,11 +4,11 @@ Run from any directory after `dotnet build EntraAuthProxy.sln`:
     python3 tests/verify_repository.py
 """
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+from verify_cli import assert_before_authentication, check_cli, run_cli
 
 root = Path(__file__).resolve().parents[1]
 sample = json.loads((root / "sample-entraauthproxy.json").read_text())
@@ -17,18 +17,37 @@ assert len(examples) == 2, "Expected setup and routing examples"
 for example in examples:
     json.loads(example if example.lstrip().startswith("{") else "{" + example + "}")
 
+check_cli()
+
 with tempfile.TemporaryDirectory(prefix="entra-starter-") as directory:
     work = Path(directory)
     config = work / "config"
-    env = dict(os.environ, ENTRAAUTHPROXY_CONFIG_DIR=str(config))
-    result = subprocess.run(
-        ["dotnet", str(root / "artifacts/bin/EntraAuthProxy/debug/entraauthproxy.dll")],
-        cwd=work, env=env, capture_output=True, text=True, timeout=20,
-    )
+    result = run_cli(work, config, [])
     assert result.returncode == 0, result.stderr
     assert "Created default configuration" in result.stdout, result.stdout
-    assert "Successfully authenticated" not in result.stdout, result.stdout
+    assert_before_authentication(result)
     assert json.loads((config / "entraauthproxy.json").read_text()) == sample
+
+for name in ("work-prod_2", "παραγωγή_٢", "生产_１２", "𐐀_𝟠"):
+    with tempfile.TemporaryDirectory(prefix="entra-profile-starter-") as directory:
+        work = Path(directory)
+        config = work / "config"
+        config.mkdir()
+        base_file = config / "entraauthproxy.json"
+        # A malformed base and local file prove neither is loaded for the profile
+        # when the environment-selected directory disables local lookup.
+        base_file.write_text("unprofiled configuration must be ignored")
+        (work / "entraauthproxy.json").write_text("local configuration must be ignored")
+        before = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+        result = run_cli(work, config, ["--profile", name])
+        assert result.returncode == 0, (name, result.stderr)
+        selected = config / name / "entraauthproxy.json"
+        assert f"Created default configuration at {selected}" in result.stdout, result.stdout
+        assert_before_authentication(result)
+        assert json.loads(selected.read_text()) == sample
+        for path, contents in before.items():
+            assert path.read_bytes() == contents, f"Unexpected change to {path}"
+        assert set(path for path in work.rglob("*") if path.is_file()) == set(before) | {selected}, "Unexpected configuration/cache writes"
 
 # Include hidden tracked files and nonignored new files. Only these
 # dedicated negative checks may contain the old identifiers.
@@ -43,5 +62,5 @@ for name in set(files) - {""}:
     if path.is_file() and pattern.search(path.read_text()):
         assert name in allowed, f"Unexpected removal reference: {name}"
         matched.add(name)
-print("PASS: sample, 2 README JSON examples, isolated starter generation/exit, maintained-file audit.")
+print("PASS: sample, 2 README JSON examples, isolated default/ASCII/Unicode profile starters, pre-authentication exit, maintained-file audit.")
 print("Allowed negative-test matches: " + ", ".join(sorted(matched)))

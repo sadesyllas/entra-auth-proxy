@@ -1,16 +1,42 @@
 using System.CommandLine;
+using System.Text;
 using EntraAuthProxy;
 
 var configOption = new Option<FileInfo?>(
     aliases: new[] { "-c", "--config" },
     description: "The path to an explicit configuration file.");
 
+var profileOption = new Option<string?>(
+    name: "--profile",
+    description: "Select a configuration folder under the application base directory.")
+{
+    Arity = ArgumentArity.ExactlyOne,
+    ArgumentHelpName = "name"
+};
+profileOption.AddValidator(result =>
+{
+    var name = result.GetValueOrDefault<string?>();
+    if (string.IsNullOrEmpty(name) ||
+        name.EnumerateRunes().Any(rune => !Rune.IsLetter(rune) && !Rune.IsDigit(rune) && rune.Value != '-' && rune.Value != '_'))
+    {
+        result.ErrorMessage = "--profile requires a non-empty name containing only Unicode letters, decimal digits, hyphens, or underscores.";
+    }
+});
+
 var rootCommand = new RootCommand("Entra ID Auth Proxy")
 {
-    configOption
+    configOption,
+    profileOption
 };
+rootCommand.AddValidator(result =>
+{
+    if (result.FindResultFor(configOption) != null && result.FindResultFor(profileOption) != null)
+    {
+        result.ErrorMessage = "--profile cannot be combined with -c or --config.";
+    }
+});
 
-rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
+rootCommand.SetHandler(async (FileInfo? configFileInfo, string? profileName) =>
 {
     string? explicitConfigFile = configFileInfo?.FullName;
 
@@ -21,69 +47,16 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
         return;
     }
 
-    var configFileName = "entraauthproxy.json";
-    var envConfigDir = Environment.GetEnvironmentVariable("ENTRAAUTHPROXY_CONFIG_DIR");
-    var localConfigPath = Path.Combine(Directory.GetCurrentDirectory(), configFileName);
-
-    string globalConfigDir;
-
-    bool isEnvSet = !string.IsNullOrWhiteSpace(envConfigDir);
-
-    if (isEnvSet)
-    {
-        globalConfigDir = envConfigDir!;
-    }
-    else
-    {
-        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        globalConfigDir = Path.Combine(userProfile, ".config", "entraauthproxy");
-    }
-
-    string globalConfigPath = Path.Combine(globalConfigDir, configFileName);
-
-    Directory.CreateDirectory(globalConfigDir);
+    var locations = ConfigurationLocations.Resolve(
+        explicitConfigFile,
+        profileName,
+        Environment.GetEnvironmentVariable("ENTRAAUTHPROXY_CONFIG_DIR"),
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        Directory.GetCurrentDirectory());
 
     var builder = WebApplication.CreateBuilder(args);
-    builder.Configuration.Sources.Clear();
-
-    if (explicitConfigFile != null)
-    {
-        builder.Configuration.AddJsonFile(Path.GetFullPath(explicitConfigFile), optional: false, reloadOnChange: true);
-    }
-    else
-    {
-        bool envOrGlobalExists = File.Exists(globalConfigPath);
-        bool localExists = !isEnvSet && File.Exists(localConfigPath);
-
-        if (!envOrGlobalExists && !localExists)
-        {
-            var defaultConfig = @"{
-  ""EntraAuth"": {
-    ""TenantId"": ""organizations"",
-    ""ClientId"": """",
-    ""TargetScope"": ""api://<app-id>/.default""
-  },
-  ""TargetAddress"": ""https://api.<provider>.com/"",
-  ""Port"": 5000,
-  ""RedirectPort"": 5000,
-  ""DangerousAcceptAnyServerCertificate"": false,
-  ""ForceInteractiveAuthentication"": false
-}";
-            File.WriteAllText(globalConfigPath, defaultConfig);
-            Console.WriteLine($"Created default configuration at {globalConfigPath}. Please update it with your ClientId and TargetScope, then restart.");
-            return;
-        }
-
-        if (envOrGlobalExists)
-        {
-            builder.Configuration.AddJsonFile(globalConfigPath, optional: false, reloadOnChange: true);
-        }
-
-        if (!isEnvSet && localExists)
-        {
-            builder.Configuration.AddJsonFile(localConfigPath, optional: false, reloadOnChange: true);
-        }
-    }
+    var startup = StartupConfiguration.Load(builder.Configuration, locations);
+    if (startup == null) return;
 
     var portStr = builder.Configuration["Port"];
     if (!string.IsNullOrEmpty(portStr) && int.TryParse(portStr, out var port))
@@ -104,7 +77,7 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
     var tokenProvider = new TokenProvider();
     builder.Services.AddSingleton(tokenProvider);
 
-    var msalApp = await AuthExtensions.BuildAndAuthenticateAsync(globalConfigDir, builder.Configuration, tokenProvider);
+    var msalApp = await startup.AuthenticateAsync(tokenProvider);
     
     Console.WriteLine("Successfully authenticated with Entra ID.");
     
@@ -118,6 +91,6 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo) =>
     app.MapReverseProxy();
     await app.RunAsync();
 
-}, configOption);
+}, configOption, profileOption);
 
 return await rootCommand.InvokeAsync(args);

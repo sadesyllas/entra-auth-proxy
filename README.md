@@ -85,7 +85,9 @@ Package versions are centrally declared in `Directory.Packages.props`.
 
 | File | Purpose |
 | --- | --- |
-| `EntraAuthProxy/Program.cs` | CLI options, configuration loading, authentication, and host setup |
+| `EntraAuthProxy/Program.cs` | CLI validation and application host setup |
+| `EntraAuthProxy/ConfigurationLocations.cs` | Shared base, profile, explicit-file, and local lookup paths |
+| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, and the authentication cache-directory boundary |
 | `EntraAuthProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token transform |
 | `EntraAuthProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
 | `EntraAuthProxy/TokenProvider.cs` | Shared in-memory access token |
@@ -98,17 +100,32 @@ The application clears the standard ASP.NET Core configuration sources and loads
 
 Configuration is selected as follows:
 
-1. **Explicit file:** `--config /absolute/path/settings.json` (or `-c`) loads only that file. A missing explicit file is an error.
-2. **Environment-selected directory:** without `--config`, setting `ENTRAAUTHPROXY_CONFIG_DIR` loads `entraauthproxy.json` from that directory and disables current-directory configuration lookup.
-3. **Default locations:** otherwise, the application loads `~/.config/entraauthproxy/entraauthproxy.json`, then overlays `entraauthproxy.json` from the current working directory if present. Local values take precedence.
+1. **Explicit file:** `--config /absolute/path/settings.json` (or `-c`) loads only that file, taking precedence over automatic environment and default lookup. A missing explicit file is an error. Combining either config option with `--profile` is a CLI error, in either argument order, before any directory creation, JSON loading, sign-in, or listener startup.
+2. **Base directory:** without an explicit file, `ENTRAAUTHPROXY_CONFIG_DIR` selects the complete application base directory when its value is not empty or whitespace. Otherwise, the base is `~/.config/entraauthproxy`. An environment-selected base does not receive another `entraauthproxy` directory segment.
+3. **Selected global JSON:** `--profile <name>` selects `<base>/<name>/entraauthproxy.json`. Without a profile, the selected file is `<base>/entraauthproxy.json`. A profile uses the existing JSON schema; the unprofiled base JSON is not loaded as an additional source or fallback.
+4. **Working-directory overlay:** when the base-directory environment variable is unset, empty, or whitespace, the application then loads `entraauthproxy.json` from the current working directory if present. Local values override matching properties; properties omitted locally retain their selected global values. A local file can load alone when the selected global file is missing. An effective environment override disables local lookup, with or without a profile.
 
-If no configuration file is found through automatic lookup, the application creates a starter file in the selected global directory and exits. Edit it and restart. On Windows, `~` denotes the user profile too, so the default directory is `<UserProfile>\.config\entraauthproxy`.
+If neither the selected global JSON nor an eligible local file exists, the application creates the selected directory and writes its existing starter JSON there, reports its path, and exits successfully before sign-in. With a profile, the starter goes inside the profile folder even if the base directory already contains an unprofiled JSON file. Edit the starter and restart. On Windows, `~` denotes the user profile too, so the default base is `<UserProfile>\.config\entraauthproxy`.
 
-The token cache always uses `ENTRAAUTHPROXY_CONFIG_DIR` when set, or `~/.config/entraauthproxy` otherwise. Selecting an explicit configuration file does **not** move the token cache next to that file.
+Profile names require a value and must be non-empty identifiers containing only Unicode letters (category `L`), Unicode decimal digits (`Nd`), hyphens, or underscores. For example, `work-prod_2` and `παραγωγή_٢` are valid. Dots, spaces, directory separators, rooted paths, other punctuation, and combining marks are rejected as CLI errors; names are not silently repaired.
+
+Select a profile under the default base:
+
+```sh
+dotnet run --project EntraAuthProxy --no-launch-profile -- --profile work
+```
+
+This selects `~/.config/entraauthproxy/work/entraauthproxy.json`, followed by any eligible working-directory overlay. To select `/custom/config/work/entraauthproxy.json` and disable that overlay:
+
+```sh
+ENTRAAUTHPROXY_CONFIG_DIR=/custom/config dotnet run --project EntraAuthProxy --no-launch-profile -- --profile work
+```
+
+The token cache always uses the **base directory**: the effective `ENTRAAUTHPROXY_CONFIG_DIR` value, or `~/.config/entraauthproxy` otherwise. A profile does not move the cache into its folder, and an explicit configuration file does not move it next to that file. Cache names and OS credential-store identifiers are unchanged; profiles using the same tenant, client, and scope share the same cache.
 
 | Setting | Meaning |
 | --- | --- |
-| `EntraAuth.TenantId` | Entra tenant identifier; the sample uses `organizations`. |
+| `EntraAuth.TenantId` | Entra tenant identifier; replace the starter and sample's `Entra tenant ID` placeholder. |
 | `EntraAuth.ClientId` | Public-client application ID used for sign-in. |
 | `EntraAuth.TargetScope` | Single scope requested for the upstream API, such as `api://<app-id>/.default`. |
 | `TargetAddress` | Upstream base URL for the generated catch-all route. |
@@ -156,10 +173,11 @@ To run the local verification after a default Debug build (the repository check 
 
 ```sh
 dotnet run --project tests/ProxyBehaviorChecks --no-build --no-launch-profile
+dotnet run --project tests/ConfigurationBehaviorChecks --no-build --no-launch-profile
 python3 tests/verify_repository.py
 ```
 
-The harness uses loopback proxy/upstream listeners and a deterministic token. It checks routing, authorization replacement, header and payload forwarding without Entra credentials. The Python check validates configuration examples, starter generation, and the maintained-file inventory.
+The proxy harness uses loopback proxy/upstream listeners and a deterministic token to check routing, authorization replacement, and header and payload forwarding. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement. It verifies required JSON sources retain reload watching. The Python check validates CLI errors and Unicode names, configuration examples, real startup starter generation, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
 
 Run the published executable with the same configuration option:
 
