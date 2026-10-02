@@ -38,7 +38,7 @@ Start the proxy:
 dotnet run --project EntraAuthProxy --no-launch-profile -- --config "$PWD/entraauthproxy.json"
 ```
 
-`dotnet run` restores dependencies and builds automatically. `--no-launch-profile` bypasses the repository's developer-specific launch settings. The commands above use a POSIX shell; in PowerShell, use `Copy-Item` to copy the sample and pass the configuration's absolute path to `--config`.
+`dotnet run` restores dependencies and builds automatically. `--no-launch-profile` bypasses the repository's developer-specific launch settings, including `Debug` overrides for both logging levels. The commands above use a POSIX shell; in PowerShell, use `Copy-Item` to copy the sample and pass the configuration's absolute path to `--config`.
 
 Complete browser sign-in if prompted, then point your client at `http://localhost:5000`, including whatever API path the upstream expects. For example, if your gateway exposes an OpenAI-compatible `/v1` API, use `http://localhost:5000/v1` as the client's base URL:
 
@@ -62,7 +62,7 @@ CLI / IDE ──HTTP──> Kestrel + YARP ──Bearer token──> Upstream AP
              Entra ID / persistent token cache
 ```
 
-1. **Load configuration.** The application reads its JSON settings, validates and captures optional custom request headers, sets the listening port, and configures console logging.
+1. **Load configuration.** The application reads its JSON settings, validates and captures logging overrides and optional custom request headers, sets the listening port, and configures console logging.
 2. **Authenticate before accepting traffic.** MSAL builds a public client for the configured tenant and client ID. It first tries silent authentication using the first cached account. If user interaction is required, it opens a browser. Forced interactive sign-in skips the silent attempt. Kestrel starts only after authentication succeeds.
 3. **Persist the session.** MSAL Extensions registers a persistent token cache using OS-protected storage: Windows protection, macOS Keychain, or Linux Keyring. Cache persistence is verified during startup. The cache name contains a SHA-256 hash of the tenant ID, client ID, and target scope, separating those authentication configurations.
 4. **Keep a token ready.** The singleton `TokenProvider` stores the access token with `Volatile.Read` and `Volatile.Write`, allowing concurrent requests to read the current token without an explicit lock.
@@ -88,7 +88,8 @@ Package versions are centrally declared in `Directory.Packages.props`.
 | --- | --- |
 | `EntraAuthProxy/Program.cs` | CLI validation and application host setup |
 | `EntraAuthProxy/ConfigurationLocations.cs` | Shared base, profile, explicit-file, and local lookup paths |
-| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, header capture before authentication, and the cache-directory boundary |
+| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, logging/header capture before authentication, and the cache-directory boundary |
+| `EntraAuthProxy/StartupLogging.cs` | Selected environment-variable validation and captured startup logging thresholds |
 | `EntraAuthProxy/CustomRequestHeaders.cs` | Shared loading and reserved-header validation for an immutable startup header map |
 | `EntraAuthProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token/static-header transform |
 | `EntraAuthProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
@@ -141,6 +142,31 @@ The token cache always uses the **base directory**: the effective `ENTRAAUTHPROX
 `ENTRAAUTHPROXY_FORCE_INTERACTIVE` overrides `ForceInteractiveAuthentication` when present: only the value `true` (case-insensitive) enables it; any other value disables it.
 
 `Port` and `RedirectPort` can be equal because startup authentication happens before Kestrel begins listening. Ensure the callback port is available during sign-in. Although JSON files are loaded with change watching enabled, several values are captured during startup; restart after configuration changes to apply them consistently.
+
+### Startup logging
+
+Set either of these environment variables when starting the proxy:
+
+| Environment variable | Minimum logging level | Fallback when unset |
+| --- | --- | --- |
+| `ENTRAAUTHPROXY_LOG_LEVEL` | Default for categories without a more specific rule | `Information` |
+| `ENTRAAUTHPROXY_ASPNETCORE_LOG_LEVEL` | `Microsoft.AspNetCore` and its subcategories | `Warning` |
+
+The settings work independently with default discovery, `--profile`, `ENTRAAUTHPROXY_CONFIG_DIR`, and `-c`/`--config`. Accepted values are `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, and `None`, case-insensitively. Surrounding whitespace is trimmed; missing, empty, and whitespace-only values retain the fallback for that variable. Other nonblank values, including numbers and comma-separated combinations, fail startup after JSON loading with an error on standard error naming the variable and allowed values, before sign-in, persistent token-cache access, or listener startup.
+
+When automatic discovery creates a starter configuration, the process exits successfully before validating these overrides. Validation occurs after you fill in the starter and restart.
+
+For example, using the configuration created in the setup steps:
+
+```sh
+ENTRAAUTHPROXY_LOG_LEVEL=Error \
+ENTRAAUTHPROXY_ASPNETCORE_LOG_LEVEL=Debug \
+dotnet run --project EntraAuthProxy --no-launch-profile -- --config "$PWD/entraauthproxy.json"
+```
+
+This allows ASP.NET Core debug logs while the default threshold remains `Error`. Setting only the default to `Debug` retains `Warning` for ASP.NET Core. Native logging rules choose the most specific matching provider/category rule, so existing more specific category or provider rules retain their precedence. `None` suppresses logs governed by that setting; it does not change the other threshold or suppress direct console messages such as authentication and starter-configuration output.
+
+These two variables are read explicitly; ordinary environment-variable configuration for application settings remains disabled. Their values are captured once per startup, and watched JSON reloads retain the captured thresholds. Restart the proxy to apply changes. Console logging retains its existing single-line output and UTC timestamp format.
 
 ### Custom request headers
 
@@ -203,7 +229,7 @@ dotnet run --project tests/ConfigurationBehaviorChecks --no-build --no-launch-pr
 python3 tests/verify_repository.py
 ```
 
-The proxy harness uses loopback proxy/upstream listeners and deterministic tokens to check routing, authorization replacement, header and payload forwarding, static-header collisions, empty/content headers, concurrency, and the startup snapshot across JSON/YARP reload and restart. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement and reserved-header rejection. It verifies required JSON sources retain reload watching and custom-header snapshots stay fixed. The Python check validates CLI errors and Unicode names, pre-authentication reserved-header failures, configuration examples, real startup starter generation, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
+The proxy harness uses loopback proxy/upstream listeners and deterministic tokens to check routing, authorization replacement, header and payload forwarding, static-header collisions, empty/content headers, concurrency, and the startup snapshot across JSON/YARP reload and restart. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement and reserved-header/logging validation. It checks actual logger filtering and captured events, native category/provider precedence, watched JSON reloads, and fixed startup logging/header snapshots. The Python check validates CLI errors and Unicode names, pre-authentication reserved-header and logging failures, configuration and logging examples, real startup starter generation, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
 
 Run the published executable with the same configuration option:
 
@@ -216,6 +242,8 @@ Run the published executable with the same configuration option:
 - **A starter configuration was created and the process exited:** fill in the real identity and upstream settings, then restart.
 - **Startup rejects `Headers` containing `Authorization`:** remove that entry in every capitalization from the selected configuration and any eligible local overlay; the proxy manages the bearer token.
 - **Custom header changes have not taken effect:** restart the proxy after editing `Headers`; JSON reloads and route rebuilds retain the startup values.
+- **Startup rejects a logging level:** use one of the named levels listed above; numeric levels and combined values are rejected.
+- **Logging override changes have not taken effect:** restart with the updated environment variables; JSON reloads retain the startup thresholds.
 - **Browser sign-in or consent fails:** check the tenant, public-client app registration, loopback redirect URI, and permission/consent for the target API scope.
 - **Token-cache persistence fails:** check access to the configuration directory and OS credential storage. Linux requires a usable keyring; the application has no plaintext-cache fallback.
 - **Requests fail after a previously working session:** background refresh catches errors and retries on later ticks, retaining the previous token. It does not prompt for login or log refresh failures. If renewed interaction is required, restart with forced interactive authentication.

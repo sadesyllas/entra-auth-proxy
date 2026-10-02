@@ -7,9 +7,11 @@
       "launchBrowser": false,
       "applicationUrl": "http://localhost:5038",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ENTRAAUTHPROXY_LOG_LEVEL": "Debug",
+        "ENTRAAUTHPROXY_ASPNETCORE_LOG_LEVEL": "Debug"
       },
-      "commandLineArgs": "-c /home/bellerophon/src/EntraAuthProxy/artifacts/llm.json"
+      "commandLineArgs": "-c /Users/bellerophon/src/EntraAuthProxy/artifacts/entraauthproxy.json"
     },
     "https": {
       "commandName": "Project",
@@ -17,7 +19,9 @@
       "launchBrowser": false,
       "applicationUrl": "https://localhost:7294;http://localhost:5038",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ENTRAAUTHPROXY_LOG_LEVEL": "Debug",
+        "ENTRAAUTHPROXY_ASPNETCORE_LOG_LEVEL": "Debug"
       }
     }
   }

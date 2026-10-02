@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using EntraAuthProxy;
 using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Identity.Client;
+using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 using static ConfigurationBehaviorChecks.TestAssertions;
 
 namespace ConfigurationBehaviorChecks;
@@ -146,7 +148,7 @@ internal static class ConfigurationLoadingChecks
             cases++;
         }
 
-        Console.WriteLine($"PASS: {cases} production loading, overlay, starter, and authentication-boundary cases without sign-in or persistent cache access.");
+        Console.WriteLine($"PASS: {cases} production loading, overlay, starter, authentication-boundary, logging-mode, and watched-reload cases without sign-in or persistent cache access.");
     }
 
     private static async Task CheckLoadedAsync(
@@ -157,8 +159,13 @@ internal static class ConfigurationLoadingChecks
         Dictionary<string, string?> expectedSettings,
         IPublicClientApplication authenticationResult)
     {
+        using var environment = new LoggingEnvironmentScope("Error", "Debug");
         var before = workspace.Files();
-        using var configuration = new ConfigurationManager();
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            Args = [], ContentRootPath = workspace.WorkingDirectory, EnvironmentName = Environments.Production
+        });
+        using var configuration = builder.Configuration;
         configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["HostDefault"] = "must-clear" });
         var startup = StartupConfiguration.Load(configuration, locations);
         Require(startup != null, "existing eligible JSON prevents starter exit");
@@ -174,9 +181,19 @@ internal static class ConfigurationLoadingChecks
             Require(sources[index].FileProvider!.GetFileInfo(sources[index].Path!).PhysicalPath == expectedSources[index], "JSON source path and ordering");
         }
 
+        Require(startup!.Logging.DefaultLevel == LogLevel.Error && startup.Logging.AspNetCoreLevel == LogLevel.Debug,
+            "logging overrides are captured under every production configuration-selection mode");
+        startup.Logging.Configure(builder.Logging);
+        await using var app = builder.Build();
+        using var provider = new CapturingLoggerProvider();
+        var factory = app.Services.GetRequiredService<ILoggerFactory>();
+        factory.AddProvider(provider);
+        LoggingChecks.AssertFiltering(factory, provider, LogLevel.Error, LogLevel.Debug);
+        CheckNativeLogging(factory, provider, LogLevel.Trace, LogLevel.Error, LogLevel.Debug);
+
         var tokens = new TokenProvider();
         var called = false;
-        var result = await startup!.AuthenticateAsync(tokens, (cacheDirectory, loadedConfiguration, tokenProvider) =>
+        var result = await startup.AuthenticateAsync(tokens, (cacheDirectory, loadedConfiguration, tokenProvider) =>
         {
             called = true;
             Require(cacheDirectory == expectedCacheDirectory, "authentication receives the base directory, independent of profile or explicit JSON");
@@ -186,7 +203,52 @@ internal static class ConfigurationLoadingChecks
         });
         Require(called && ReferenceEquals(result, authenticationResult), "startup invokes and returns the authentication boundary");
         Require(workspace.Files().SequenceEqual(before), "loading and the test authentication boundary do not write configuration or token caches");
+
+        // Watch the real JSON source rather than calling Reload, including host
+        // logging options. Environment changes must not trigger fresh resolution.
+        using var changedEnvironment = new LoggingEnvironmentScope("invalid-after-startup", "invalid-after-startup");
+        TestWorkspace.WriteJson(expectedSources[^1], new
+        {
+            Marker = "logging-reloaded",
+            Logging = LoggingSettings("None", "None", "Critical", "Trace", "Trace")
+        });
+        var timeout = Stopwatch.StartNew();
+        while (configuration["Marker"] != "logging-reloaded" ||
+               !factory.CreateLogger("Microsoft.AspNetCore.Server").IsEnabled(LogLevel.Trace) ||
+               !factory.CreateLogger("EntraAuthProxy.ProviderCategory").IsEnabled(LogLevel.Trace))
+        {
+            Require(timeout.Elapsed < TimeSpan.FromSeconds(10), "watched JSON reload updates configuration and native logging rules");
+            await Task.Delay(50);
+        }
+        Require(configuration["Logging:LogLevel:Default"] == "None" && configuration["Logging:LogLevel:Microsoft.AspNetCore"] == "None",
+            "watched JSON reload changes the configured default and ASP.NET Core levels");
+        LoggingChecks.AssertFiltering(factory, provider, LogLevel.Error, LogLevel.Debug);
+        CheckNativeLogging(factory, provider, LogLevel.Critical, LogLevel.Trace, LogLevel.Trace);
+        Require(startup.Logging.DefaultLevel == LogLevel.Error && startup.Logging.AspNetCoreLevel == LogLevel.Debug,
+            "captured override levels survive JSON reload and environment changes");
+        Require(workspace.Files().SequenceEqual(before), "reload adds no configuration or token-cache files");
     }
+
+    private static void CheckNativeLogging(ILoggerFactory factory, CapturingLoggerProvider provider,
+        LogLevel otherCategory, LogLevel aspNetCoreSubcategory, LogLevel providerCategory)
+    {
+        LoggingChecks.AssertCategoryFiltering(factory, provider, "EntraAuthProxy.NativeCategory", otherCategory);
+        LoggingChecks.AssertCategoryFiltering(factory, provider, "Microsoft.AspNetCore.Server", aspNetCoreSubcategory);
+        LoggingChecks.AssertCategoryFiltering(factory, provider, "EntraAuthProxy.ProviderCategory", providerCategory);
+    }
+
+    private static object LoggingSettings(string defaultLevel, string aspNetCoreLevel, string otherCategory,
+        string aspNetCoreSubcategory, string providerCategory) => new
+    {
+        LogLevel = new Dictionary<string, string>
+        {
+            ["Default"] = defaultLevel,
+            ["Microsoft.AspNetCore"] = aspNetCoreLevel,
+            ["EntraAuthProxy.NativeCategory"] = otherCategory,
+            ["Microsoft.AspNetCore.Server"] = aspNetCoreSubcategory
+        },
+        Capture = new { LogLevel = new Dictionary<string, string> { ["EntraAuthProxy.ProviderCategory"] = providerCategory } }
+    };
 
     private static void SeedDistinctFiles(TestWorkspace workspace)
     {
@@ -210,6 +272,7 @@ internal static class ConfigurationLoadingChecks
             ["Marker"] = marker,
             ["EntraAuth"] = new { TenantId = marker + "-tenant", ClientId = marker + "-client", TargetScope = marker + "-scope" },
             ["Port"] = 8000,
+            ["Logging"] = LoggingSettings("Trace", "Critical", "Trace", "Error", "Debug"),
             [uniqueKey] = marker
         });
 }

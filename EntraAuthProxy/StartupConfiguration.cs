@@ -2,7 +2,7 @@ using Microsoft.Identity.Client;
 
 namespace EntraAuthProxy;
 
-/// <summary>Loads application JSON and retains the base directory for authentication.</summary>
+/// <summary>Loads JSON, captures startup settings, and retains the authentication base directory.</summary>
 internal sealed class StartupConfiguration
 {
     private readonly ConfigurationLocations locations;
@@ -12,17 +12,21 @@ internal sealed class StartupConfiguration
     {
         this.locations = locations;
         this.configuration = configuration;
+        Logging = StartupLogging.CaptureEnvironment();
         Headers = CustomRequestHeaders.Capture(configuration);
     }
 
     public CustomRequestHeaders Headers { get; }
+
+    public StartupLogging Logging { get; }
 
     /// <summary>
     /// Replaces host configuration sources with the explicit JSON or selected global
     /// JSON plus any eligible local overlay. Returns null after writing and reporting
     /// a missing configuration's starter, so the caller exits before authentication.
     /// Existing JSON remains required and watched for changes; loading errors propagate.
-    /// Captures and validates Headers before authentication or persistent cache access.
+    /// Captures and validates logging overrides and Headers before authentication
+    /// or persistent cache access. A starter exit does not validate overrides.
     /// </summary>
     public static StartupConfiguration? Load(ConfigurationManager configuration, ConfigurationLocations locations)
     {

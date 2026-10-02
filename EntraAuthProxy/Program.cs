@@ -64,15 +64,7 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo, string? profileName) =>
         builder.WebHost.UseUrls($"http://*:{port}");
     }
 
-    builder.Logging.ClearProviders();
-    builder.Logging.AddSimpleConsole(options =>
-    {
-        options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
-        options.UseUtcTimestamp = true;
-        options.SingleLine = true;
-    });
-    builder.Logging.SetMinimumLevel(LogLevel.Information);
-    builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+    startup.Logging.Configure(builder.Logging);
 
     var tokenProvider = new TokenProvider();
     builder.Services.AddSingleton(tokenProvider);

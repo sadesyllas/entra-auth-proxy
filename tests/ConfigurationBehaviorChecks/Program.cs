@@ -1,6 +1,7 @@
 using ConfigurationBehaviorChecks;
 using static ConfigurationBehaviorChecks.TestAssertions;
 
+using var loggingEnvironment = new LoggingEnvironmentScope();
 using var workspace = new TestWorkspace();
 var defaultBase = Path.Combine(workspace.UserProfile, ".config", "entraauthproxy");
 var localPath = Path.Combine(workspace.WorkingDirectory, "entraauthproxy.json");
@@ -48,3 +49,4 @@ Console.WriteLine($"PASS: {cases} production configuration-location cases withou
 
 await ConfigurationLoadingChecks.RunAsync();
 await CustomHeaderChecks.RunAsync();
+await LoggingChecks.RunAsync();
