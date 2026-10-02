@@ -2,7 +2,7 @@
 
 A small .NET reverse proxy that signs you in with Microsoft Entra ID and adds your access token to requests sent to an upstream API. It lets CLI tools and IDEs use Entra-protected APIs without implementing interactive Entra authentication themselves.
 
-Your client talks to the proxy using the upstream API's existing request format. The proxy handles sign-in, token caching, background renewal, and forwarding. The upstream gateway remains responsible for authorization, model access, budgets, and rate limits.
+Your client talks to the proxy using the upstream API's existing request format. The proxy handles sign-in, token caching, background renewal, forwarding, and optional static request headers. The upstream gateway remains responsible for authorization, model access, budgets, and rate limits.
 
 ## TL;DR: setup and run
 
@@ -24,6 +24,7 @@ Edit `entraauthproxy.json` with your actual values:
     "TargetScope": "api://<upstream-api-app-id>/.default"
   },
   "TargetAddress": "https://<your-gateway>/",
+  "Headers": {},
   "Port": 5000,
   "RedirectPort": 5000,
   "DangerousAcceptAnyServerCertificate": false,
@@ -61,12 +62,12 @@ CLI / IDE ──HTTP──> Kestrel + YARP ──Bearer token──> Upstream AP
              Entra ID / persistent token cache
 ```
 
-1. **Load configuration.** The application reads its JSON settings, sets the listening port, and configures console logging.
+1. **Load configuration.** The application reads its JSON settings, validates and captures optional custom request headers, sets the listening port, and configures console logging.
 2. **Authenticate before accepting traffic.** MSAL builds a public client for the configured tenant and client ID. It first tries silent authentication using the first cached account. If user interaction is required, it opens a browser. Forced interactive sign-in skips the silent attempt. Kestrel starts only after authentication succeeds.
 3. **Persist the session.** MSAL Extensions registers a persistent token cache using OS-protected storage: Windows protection, macOS Keychain, or Linux Keyring. Cache persistence is verified during startup. The cache name contains a SHA-256 hash of the tenant ID, client ID, and target scope, separating those authentication configurations.
 4. **Keep a token ready.** The singleton `TokenProvider` stores the access token with `Volatile.Read` and `Volatile.Write`, allowing concurrent requests to read the current token without an explicit lock.
 5. **Refresh in the background.** `TokenRefreshService` calls MSAL's `AcquireTokenSilent` every 30 seconds and updates the token when successful. MSAL decides whether to reuse its cached token or obtain a new one; the proxy does not implement its own expiry threshold. Individual proxied requests do not initiate authentication.
-6. **Forward requests.** YARP's default catch-all route forwards requests to `TargetAddress`. A request transform replaces `Authorization` with `Bearer <access-token>`.
+6. **Forward requests.** YARP's default catch-all route forwards requests to `TargetAddress`. A request transform replaces `Authorization` with `Bearer <access-token>` and applies any configured static request headers on every route.
 
 The application does not parse or translate LLM payloads or implement model-specific endpoints. YARP handles HTTP forwarding, and API compatibility depends on the upstream service. Use a scope for the **upstream API**, rather than an unrelated resource such as Microsoft Graph, so the token targets the intended service.
 
@@ -87,8 +88,9 @@ Package versions are centrally declared in `Directory.Packages.props`.
 | --- | --- |
 | `EntraAuthProxy/Program.cs` | CLI validation and application host setup |
 | `EntraAuthProxy/ConfigurationLocations.cs` | Shared base, profile, explicit-file, and local lookup paths |
-| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, and the authentication cache-directory boundary |
-| `EntraAuthProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token transform |
+| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, header capture before authentication, and the cache-directory boundary |
+| `EntraAuthProxy/CustomRequestHeaders.cs` | Shared loading and reserved-header validation for an immutable startup header map |
+| `EntraAuthProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token/static-header transform |
 | `EntraAuthProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
 | `EntraAuthProxy/TokenProvider.cs` | Shared in-memory access token |
 | `EntraAuthProxy/TokenRefreshService.cs` | Periodic silent token acquisition |
@@ -129,6 +131,7 @@ The token cache always uses the **base directory**: the effective `ENTRAAUTHPROX
 | `EntraAuth.ClientId` | Public-client application ID used for sign-in. |
 | `EntraAuth.TargetScope` | Single scope requested for the upstream API, such as `api://<app-id>/.default`. |
 | `TargetAddress` | Upstream base URL for the generated catch-all route. |
+| `Headers` | Optional flat object of header names and single static string values, applied to every outgoing proxied request. Omitted or `{}` adds no headers; `Authorization` is reserved in every capitalization. |
 | `Port` | Proxy HTTP listening port; the sample uses `5000`. Binds all interfaces. |
 | `RedirectPort` | Local browser sign-in callback port. Falls back to `Port` when omitted. |
 | `DangerousAcceptAnyServerCertificate` | Disables upstream TLS certificate validation when `true`; leave `false` for normal use. |
@@ -138,6 +141,29 @@ The token cache always uses the **base directory**: the effective `ENTRAAUTHPROX
 `ENTRAAUTHPROXY_FORCE_INTERACTIVE` overrides `ForceInteractiveAuthentication` when present: only the value `true` (case-insensitive) enables it; any other value disables it.
 
 `Port` and `RedirectPort` can be equal because startup authentication happens before Kestrel begins listening. Ensure the callback port is available during sign-in. Although JSON files are loaded with change watching enabled, several values are captured during startup; restart after configuration changes to apply them consistently.
+
+### Custom request headers
+
+Add a top-level `Headers` object to send static request headers to your upstream. Merge this fragment into your existing configuration:
+
+```json
+{
+  "Headers": {
+    "X-Client-Name": "my-client",
+    "X-Environment": "development"
+  }
+}
+```
+
+Each value is a single string applied as configured, with no interpolation or automatic prefix. Empty string values are allowed and do not act as header-removal directives. Normal HTTP handling applies to request and content headers. Omitting `Headers`, or setting it to `{}`, preserves existing forwarding behavior.
+
+The map applies to every forwarded request on the generated catch-all and all `ReverseProxy` routes, for every HTTP method and whether a bearer token is available. Header names match case-insensitively. Each configured value replaces all existing outgoing values for that name, including multiple caller values and values set by YARP route transforms. Static headers are applied after route transforms.
+
+Existing configuration selection and overlay rules apply to this map. An eligible local overlay overrides same-name global/profile entries case-insensitively and retains inherited entries it omits. An empty local `Headers` object does not erase inherited headers. An effective `ENTRAAUTHPROXY_CONFIG_DIR` continues to disable local lookup.
+
+`Authorization` is reserved because the proxy manages the Entra bearer token. Any capitalization of that name in the effective `Headers` map, even with an empty value, stops startup before sign-in, persistent token-cache access, or listener startup.
+
+The effective map is validated and captured once before startup authentication. Restart to apply additions, edits, or removals. Watched JSON reloads and YARP route rebuilds continue to use that startup snapshot.
 
 ### Custom routing
 
@@ -158,7 +184,7 @@ For example, add the following top-level section to send `/premium/...` through 
 }
 ```
 
-With this route, `/premium/v1/models` forwards as `/v1/models`. The Entra bearer-token transform applies to all configured routes.
+With this route, `/premium/v1/models` forwards as `/v1/models`. The Entra bearer-token and configured static-header transform applies to all configured routes.
 
 ## Build and publish
 
@@ -177,7 +203,7 @@ dotnet run --project tests/ConfigurationBehaviorChecks --no-build --no-launch-pr
 python3 tests/verify_repository.py
 ```
 
-The proxy harness uses loopback proxy/upstream listeners and a deterministic token to check routing, authorization replacement, and header and payload forwarding. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement. It verifies required JSON sources retain reload watching. The Python check validates CLI errors and Unicode names, configuration examples, real startup starter generation, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
+The proxy harness uses loopback proxy/upstream listeners and deterministic tokens to check routing, authorization replacement, header and payload forwarding, static-header collisions, empty/content headers, concurrency, and the startup snapshot across JSON/YARP reload and restart. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement and reserved-header rejection. It verifies required JSON sources retain reload watching and custom-header snapshots stay fixed. The Python check validates CLI errors and Unicode names, pre-authentication reserved-header failures, configuration examples, real startup starter generation, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
 
 Run the published executable with the same configuration option:
 
@@ -188,6 +214,8 @@ Run the published executable with the same configuration option:
 ## Troubleshooting
 
 - **A starter configuration was created and the process exited:** fill in the real identity and upstream settings, then restart.
+- **Startup rejects `Headers` containing `Authorization`:** remove that entry in every capitalization from the selected configuration and any eligible local overlay; the proxy manages the bearer token.
+- **Custom header changes have not taken effect:** restart the proxy after editing `Headers`; JSON reloads and route rebuilds retain the startup values.
 - **Browser sign-in or consent fails:** check the tenant, public-client app registration, loopback redirect URI, and permission/consent for the target API scope.
 - **Token-cache persistence fails:** check access to the configuration directory and OS credential storage. Linux requires a usable keyring; the application has no plaintext-cache fallback.
 - **Requests fail after a previously working session:** background refresh catches errors and retries on later ticks, retaining the previous token. It does not prompt for login or log refresh failures. If renewed interaction is required, restart with forced interactive authentication.

@@ -5,6 +5,7 @@
     "TargetScope": "api://<app-id>/.default"
   },
   "TargetAddress": "https://api.<provider>.com/",
+  "Headers": {},
   "Port": 5000,
   "RedirectPort": 5000,
   "DangerousAcceptAnyServerCertificate": false,

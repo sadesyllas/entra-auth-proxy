@@ -85,7 +85,7 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo, string? profileName) =>
 
     builder.Services.AddHostedService<TokenRefreshService>();
 
-    builder.Services.AddTokenInjectingProxy(builder.Configuration);
+    builder.Services.AddTokenInjectingProxy(builder.Configuration, startup.Headers);
 
     var app = builder.Build();
     app.MapReverseProxy();

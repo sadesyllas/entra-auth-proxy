@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ConfigurationBehaviorChecks" />
+    <InternalsVisibleTo Include="ProxyBehaviorChecks" />
   </ItemGroup>
 
 </Project>

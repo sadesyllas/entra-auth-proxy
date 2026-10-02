@@ -47,3 +47,4 @@ cases += 3;
 Console.WriteLine($"PASS: {cases} production configuration-location cases without authentication.");
 
 await ConfigurationLoadingChecks.RunAsync();
+await CustomHeaderChecks.RunAsync();

@@ -1,9 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
 using EntraAuthProxy;
-using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Hosting.Server.Features;
 using ProxyBehaviorChecks;
+using static ProxyBehaviorChecks.ProxyTestHost;
 
 // Negative inputs intentionally name the removed integration. All routing and
 // authorization behavior comes from the same registration used by production.
@@ -91,23 +90,6 @@ foreach (var headerSource in new[] { "absent", "caller", "generic-transform" })
     }
     await proxy.StopAsync();
 }
-await upstream.StopAsync();
 Console.WriteLine($"PASS: {cases} production proxy behavior cases.");
-
-static WebApplicationBuilder CreateBuilder()
-{
-    var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
-    builder.Configuration.Sources.Clear();
-    builder.Configuration.AddInMemoryCollection();
-    builder.Logging.ClearProviders();
-    builder.WebHost.UseUrls("http://127.0.0.1:0");
-    return builder;
-}
-
-static string Address(WebApplication app) =>
-    app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-
-static void Require(bool condition, string description)
-{
-    if (!condition) throw new InvalidOperationException($"Failed: {description}");
-}
+await CustomHeaderProxyChecks.RunAsync(Address(upstream), captures);
+await upstream.StopAsync();

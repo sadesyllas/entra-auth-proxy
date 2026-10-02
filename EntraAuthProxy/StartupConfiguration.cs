@@ -12,13 +12,17 @@ internal sealed class StartupConfiguration
     {
         this.locations = locations;
         this.configuration = configuration;
+        Headers = CustomRequestHeaders.Capture(configuration);
     }
+
+    public CustomRequestHeaders Headers { get; }
 
     /// <summary>
     /// Replaces host configuration sources with the explicit JSON or selected global
     /// JSON plus any eligible local overlay. Returns null after writing and reporting
     /// a missing configuration's starter, so the caller exits before authentication.
     /// Existing JSON remains required and watched for changes; loading errors propagate.
+    /// Captures and validates Headers before authentication or persistent cache access.
     /// </summary>
     public static StartupConfiguration? Load(ConfigurationManager configuration, ConfigurationLocations locations)
     {
@@ -69,6 +73,7 @@ internal sealed class StartupConfiguration
     ""TargetScope"": ""api://<app-id>/.default""
   },
   ""TargetAddress"": ""https://api.<provider>.com/"",
+  ""Headers"": {},
   ""Port"": 5000,
   ""RedirectPort"": 5000,
   ""DangerousAcceptAnyServerCertificate"": false,

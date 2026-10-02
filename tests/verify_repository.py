@@ -8,16 +8,26 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from verify_cli import assert_before_authentication, check_cli, run_cli
+from verify_cli import assert_before_authentication, check_cli, check_reserved_headers, run_cli
 
 root = Path(__file__).resolve().parents[1]
 sample = json.loads((root / "sample-entraauthproxy.json").read_text())
+assert sample["Headers"] == {}, "Starter sample must add no custom headers by default"
 examples = re.findall(r"```json\n(.*?)\n```", (root / "README.md").read_text(), re.S)
-assert len(examples) == 2, "Expected setup and routing examples"
+assert examples, "Expected maintained README JSON examples"
+parsed_examples = []
 for example in examples:
-    json.loads(example if example.lstrip().startswith("{") else "{" + example + "}")
+    parsed_examples.append(json.loads(example if example.lstrip().startswith("{") else "{" + example + "}"))
+assert any("EntraAuth" in example for example in parsed_examples), "Expected setup example"
+assert any("ReverseProxy" in example for example in parsed_examples), "Expected routing example"
+header_examples = [example["Headers"] for example in parsed_examples if "Headers" in example]
+assert any(len(headers) >= 2 for headers in header_examples), "Expected a useful multiple-header example"
+for headers in header_examples:
+    assert isinstance(headers, dict) and all(isinstance(value, str) for value in headers.values()), "Headers examples must be flat string maps"
+    assert all(name.lower() != "authorization" for name in headers), "Headers examples must respect the reserved name"
 
 check_cli()
+check_reserved_headers()
 
 with tempfile.TemporaryDirectory(prefix="entra-starter-") as directory:
     work = Path(directory)
@@ -62,5 +72,5 @@ for name in set(files) - {""}:
     if path.is_file() and pattern.search(path.read_text()):
         assert name in allowed, f"Unexpected removal reference: {name}"
         matched.add(name)
-print("PASS: sample, 2 README JSON examples, isolated default/ASCII/Unicode profile starters, pre-authentication exit, maintained-file audit.")
+print(f"PASS: sample, {len(examples)} README JSON examples, isolated default/ASCII/Unicode profile starters, pre-authentication exit, maintained-file audit.")
 print("Allowed negative-test matches: " + ", ".join(sorted(matched)))

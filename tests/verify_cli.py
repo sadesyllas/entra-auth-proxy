@@ -2,6 +2,7 @@
 
 Run after the Debug solution build: python3 tests/verify_cli.py
 """
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -95,5 +96,34 @@ def check_cli():
     print(f"PASS: CLI help and {cases} profile validation/conflict/missing-file cases without startup side effects.")
 
 
+def check_reserved_headers():
+    cases = 0
+    for name in ("Authorization", "authorization", "AuThOrIzAtIoN"):
+        for value in ("", "secret-reserved-value"):
+            for profile in (None, "work"):
+                with tempfile.TemporaryDirectory(prefix="entra-reserved-header-") as directory:
+                    work = Path(directory)
+                    config = work / "config"
+                    selected = config / profile / "entraauthproxy.json" if profile else work / "explicit.json"
+                    selected.parent.mkdir(parents=True, exist_ok=True)
+                    # Invalid authentication settings make any accidental entry to
+                    # MSAL observable without signing in or accessing a token cache.
+                    selected.write_text(json.dumps({"Headers": {name: value}}))
+                    before = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+                    arguments = ["--profile", profile] if profile else ["--config", str(selected)]
+                    result = run_cli(work, config, arguments)
+                    output = result.stdout + result.stderr
+                    assert result.returncode != 0, output
+                    assert "Headers" in output and "Authorization" in output and "proxy manages" in output, output
+                    assert "secret-reserved-value" not in output, output
+                    assert "ClientId or EntraAuth:TargetScope is missing" not in output, output
+                    assert_before_authentication(result)
+                    after = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+                    assert after == before, "Reserved header caused configuration/cache writes"
+                    cases += 1
+    print(f"PASS: {cases} actual CLI reserved-header rejections before authentication/cache/listener startup.")
+
+
 if __name__ == "__main__":
     check_cli()
+    check_reserved_headers()
