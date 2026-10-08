@@ -237,8 +237,19 @@ Run the published executable with the same configuration option:
 ./publish/entraauthproxy --config /absolute/path/entraauthproxy.json
 ```
 
+### Downloaded release binaries on macOS
+
+macOS marks files downloaded through a browser, for example a release binary from GitHub or GitLab, with the `com.apple.quarantine` attribute, and Gatekeeper then blocks the unsigned executable from running. After downloading, remove the attribute before the first run:
+
+```sh
+xattr -d com.apple.quarantine /path/to/entraauthproxy
+```
+
+Binaries you build and publish locally are not quarantined and need no extra step.
+
 ## Troubleshooting
 
+- **macOS refuses to open a downloaded release binary:** remove the quarantine attribute with `xattr -d com.apple.quarantine /path/to/entraauthproxy`, as described in [Downloaded release binaries on macOS](#downloaded-release-binaries-on-macos).
 - **A starter configuration was created and the process exited:** fill in the real identity and upstream settings, then restart.
 - **Startup rejects `Headers` containing `Authorization`:** remove that entry in every capitalization from the selected configuration and any eligible local overlay; the proxy manages the bearer token.
 - **Custom header changes have not taken effect:** restart the proxy after editing `Headers`; JSON reloads and route rebuilds retain the startup values.
