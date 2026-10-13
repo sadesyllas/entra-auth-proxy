@@ -43,8 +43,8 @@ internal static class LoggingChecks
             var authenticated = false;
             try
             {
-                var startup = StartupConfiguration.Load(configuration, workspace.Resolve(explicitFile: path))!;
-                await startup.AuthenticateAsync(new TokenProvider(), (_, _, _) =>
+                var startup = workspace.LoadStartup(configuration, workspace.Resolve(explicitFile: path))!;
+                await startup.AuthenticateAsync(new TokenProvider(), (_, _, _, _) =>
                 {
                     authenticated = true;
                     throw new Exception("Invalid logging reached authentication.");

@@ -122,7 +122,7 @@ internal static class ConfigurationLoadingChecks
             if (useEnvironment) WriteGlobal(Path.Combine(workspace.WorkingDirectory, "entraauthproxy.json"), "ignored-local", "LocalOnly");
             var before = workspace.Files();
             using var configuration = new ConfigurationManager();
-            var startup = StartupConfiguration.Load(configuration, workspace.Resolve(profile, useEnvironment ? expectedBase : null));
+            var startup = workspace.LoadStartup(configuration, workspace.Resolve(profile, useEnvironment ? expectedBase : null));
             Require(startup == null, "starter generation tells startup to exit before authentication");
             Require(File.Exists(expectedStarter), "starter is written to the selected global location");
             Require(workspace.Files().SequenceEqual(before.Append(expectedStarter).Order()), "starter generation writes only the selected JSON");
@@ -138,7 +138,7 @@ internal static class ConfigurationLoadingChecks
             using var configuration = new ConfigurationManager();
             try
             {
-                StartupConfiguration.Load(configuration, workspace.Resolve("work", workspace.EnvironmentDirectory));
+                workspace.LoadStartup(configuration, workspace.Resolve("work", workspace.EnvironmentDirectory));
                 throw new InvalidOperationException("Malformed selected JSON unexpectedly loaded.");
             }
             catch (InvalidDataException)
@@ -167,7 +167,7 @@ internal static class ConfigurationLoadingChecks
         });
         using var configuration = builder.Configuration;
         configuration.AddInMemoryCollection(new Dictionary<string, string?> { ["HostDefault"] = "must-clear" });
-        var startup = StartupConfiguration.Load(configuration, locations);
+        var startup = workspace.LoadStartup(configuration, locations);
         Require(startup != null, "existing eligible JSON prevents starter exit");
         Require(configuration["HostDefault"] == null, "standard host configuration sources are cleared");
         foreach (var setting in expectedSettings)
@@ -193,7 +193,7 @@ internal static class ConfigurationLoadingChecks
 
         var tokens = new TokenProvider();
         var called = false;
-        var result = await startup.AuthenticateAsync(tokens, (cacheDirectory, loadedConfiguration, tokenProvider) =>
+        var result = await startup.AuthenticateAsync(tokens, (cacheDirectory, loadedConfiguration, tokenProvider, _) =>
         {
             called = true;
             Require(cacheDirectory == expectedCacheDirectory, "authentication receives the base directory, independent of profile or explicit JSON");

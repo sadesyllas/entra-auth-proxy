@@ -8,6 +8,8 @@
   "Headers": {},
   "Port": 5000,
   "RedirectPort": 5000,
+  "RedirectPath": "/",
+  "PrintAccessToken": false,
   "DangerousAcceptAnyServerCertificate": false,
   "ForceInteractiveAuthentication": false
 }

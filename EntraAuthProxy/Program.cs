@@ -66,7 +66,7 @@ rootCommand.SetHandler(async (FileInfo? configFileInfo, string? profileName) =>
 
     startup.Logging.Configure(builder.Logging);
 
-    var tokenProvider = new TokenProvider();
+    var tokenProvider = new TokenProvider(startup.PrintAccessToken);
     builder.Services.AddSingleton(tokenProvider);
 
     var msalApp = await startup.AuthenticateAsync(tokenProvider);

@@ -6,14 +6,21 @@ using Microsoft.Identity.Client.Extensions.Msal;
 
 namespace EntraAuthProxy;
 
-public static class AuthExtensions 
+public static class AuthExtensions
 {
-    public static async Task<IPublicClientApplication> BuildAndAuthenticateAsync(string configDir, IConfiguration configuration, TokenProvider tokenProvider)
+    /// <summary>
+    /// Validates callback configuration, builds the MSAL client, registers its
+    /// persistent cache, and publishes the silently or interactively acquired token.
+    /// </summary>
+    public static Task<IPublicClientApplication> BuildAndAuthenticateAsync(string configDir, IConfiguration configuration, TokenProvider tokenProvider) =>
+        BuildAndAuthenticateAsync(configDir, configuration, tokenProvider, CallbackSettings.Capture(configuration));
+
+    /// <summary>Constructs the production MSAL client without cache access or sign-in.</summary>
+    internal static IPublicClientApplication BuildClient(IConfiguration configuration, CallbackSettings callback)
     {
         var clientId = configuration["EntraAuth:ClientId"];
         var tenantId = configuration["EntraAuth:TenantId"];
         var targetScope = configuration["EntraAuth:TargetScope"];
-        var redirectPortStr = configuration["RedirectPort"] ?? configuration["Port"];
 
         if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(targetScope))
         {
@@ -23,16 +30,16 @@ public static class AuthExtensions
         var builder = PublicClientApplicationBuilder.Create(clientId)
             .WithAuthority(AzureCloudInstance.AzurePublic, tenantId);
 
-        if (!string.IsNullOrEmpty(redirectPortStr) && int.TryParse(redirectPortStr, out var redirectPort))
-        {
-            builder = builder.WithRedirectUri($"http://localhost:{redirectPort}");
-        }
-        else
-        {
-            builder = builder.WithDefaultRedirectUri();
-        }
+        return callback.Configure(builder).Build();
+    }
 
-        var app = builder.Build();
+    internal static async Task<IPublicClientApplication> BuildAndAuthenticateAsync(
+        string configDir, IConfiguration configuration, TokenProvider tokenProvider, CallbackSettings callback)
+    {
+        var app = BuildClient(configuration, callback);
+        var clientId = configuration["EntraAuth:ClientId"];
+        var tenantId = configuration["EntraAuth:TenantId"];
+        var targetScope = configuration["EntraAuth:TargetScope"]!;
 
         var cacheKeyString = $"{tenantId}_{clientId}_{targetScope}";
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(cacheKeyString));

@@ -92,4 +92,5 @@ foreach (var headerSource in new[] { "absent", "caller", "generic-transform" })
 }
 Console.WriteLine($"PASS: {cases} production proxy behavior cases.");
 await CustomHeaderProxyChecks.RunAsync(Address(upstream), captures);
+await AccessTokenProxyChecks.RunAsync(Address(upstream), captures);
 await upstream.StopAsync();

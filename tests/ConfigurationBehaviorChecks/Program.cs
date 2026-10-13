@@ -1,6 +1,14 @@
 using ConfigurationBehaviorChecks;
 using static ConfigurationBehaviorChecks.TestAssertions;
 
+// Permit a focused run while retaining the complete required suite by default.
+if (args.SequenceEqual(new[] { "--access-token-checks" }))
+{
+    using var environment = new LoggingEnvironmentScope();
+    await AccessTokenChecks.RunAsync();
+    return;
+}
+
 using var loggingEnvironment = new LoggingEnvironmentScope();
 using var workspace = new TestWorkspace();
 var defaultBase = Path.Combine(workspace.UserProfile, ".config", "entraauthproxy");
@@ -50,3 +58,5 @@ Console.WriteLine($"PASS: {cases} production configuration-location cases withou
 await ConfigurationLoadingChecks.RunAsync();
 await CustomHeaderChecks.RunAsync();
 await LoggingChecks.RunAsync();
+await CallbackChecks.RunAsync();
+await AccessTokenChecks.RunAsync();

@@ -172,7 +172,143 @@ def check_logging_overrides():
     print(f"PASS: {cases} actual CLI logging rejections across base/profile/explicit selection before authentication/cache/listener startup.")
 
 
+def check_redirect_paths():
+    cases = 0
+    invalid_paths = (
+        "", "auth/callback", "http://localhost/auth", "//example.com/auth",
+        "/auth?x=1", "/auth#fragment", "/auth\\callback", "/auth callback",
+        "/auth\ncallback", "/auth\0callback", "/a/../callback", "/auth%zz",
+        {}, [], {"child": "/callback"}, ["/callback"], True, 12,
+    )
+    for invalid in invalid_paths:
+        cases += check_rejected_callback({"RedirectPath": invalid})
+    print(f"PASS: {cases} actual CLI callback rejections across base/profile/explicit selection before authentication/cache/listener startup.")
+
+
+def check_redirect_ports():
+    invalid_settings = [({}, "RedirectPort or Port"), ({"RedirectPort": None, "Port": None}, "RedirectPort or Port")]
+    for invalid in ("", "not-a-port", -1, 65536, 0, 80, "2147483648"):
+        # An explicitly invalid RedirectPort cannot fall back to a usable Port.
+        invalid_settings.append(({"RedirectPort": invalid, "Port": 5200}, "RedirectPort"))
+        invalid_settings.append(({"Port": invalid}, "Port"))
+        invalid_settings.append(({"RedirectPort": None, "Port": invalid}, "Port"))
+    cases = 0
+    for ports, setting in invalid_settings:
+        cases += check_rejected_callback({"RedirectPath": "/Auth/Callback/", **ports}, setting)
+    print(f"PASS: {cases} actual CLI custom-path fixed-port rejections with selected-setting diagnostics before authentication/cache/listener startup.")
+
+
+def check_callback_encodings():
+    cases = 0
+    for encoding in ("utf-8-sig", "utf-16"):
+        for path_settings in ({}, {"RedirectPath": None}, {"RedirectPath": "/"}, {"RedirectPath": "/Encoded/Callback/"}):
+            for mode in ("base", "profile", "-c", "--config"):
+                with tempfile.TemporaryDirectory(prefix="entra-encoded-callback-") as directory:
+                    work = Path(directory)
+                    config = work / "config"
+                    if mode == "base":
+                        selected = config / "entraauthproxy.json"
+                        arguments = []
+                    elif mode == "profile":
+                        selected = config / "work" / "entraauthproxy.json"
+                        arguments = ["--profile", "work"]
+                    else:
+                        selected = work / "explicit.json"
+                        arguments = [mode, str(selected)]
+                    selected.parent.mkdir(parents=True, exist_ok=True)
+                    selected.write_text(json.dumps({"RedirectPort": 5100, **path_settings}), encoding=encoding)
+                    before = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+                    result = run_cli(work, config, arguments)
+                    output = result.stdout + result.stderr
+                    # Reaching this deterministic guard proves configuration loaded;
+                    # missing credentials stop before sign-in or persistent cache access.
+                    assert result.returncode != 0, output
+                    assert "ClientId or EntraAuth:TargetScope is missing" in result.stderr, result.stderr
+                    assert "JsonReaderException" not in output, output
+                    for marker in ("Successfully authenticated", "Now listening", "Application started", "Msal", "CreateCacheHelperAsync"):
+                        assert marker not in output, output
+                    after = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+                    assert after == before, "Encoded callback caused configuration/token-cache writes"
+                    cases += 1
+    print(f"PASS: {cases} actual CLI BOM configuration loads with default/custom callbacks before sign-in/cache/listener startup.")
+
+
+def check_print_access_token():
+    cases = 0
+    for invalid in ("", " ", "yes", "1", "true,false", 0, 1, 1.5, {}, [], {"child": True}, [True]):
+        for mode in ("base", "profile", "-c", "--config"):
+            with tempfile.TemporaryDirectory(prefix="entra-token-flag-") as directory:
+                work = Path(directory)
+                config = work / "config"
+                if mode == "base":
+                    selected = config / "entraauthproxy.json"
+                    arguments = []
+                elif mode == "profile":
+                    selected = config / "work" / "entraauthproxy.json"
+                    arguments = ["--profile", "work"]
+                else:
+                    selected = work / "explicit.json"
+                    arguments = [mode, str(selected)]
+                selected.parent.mkdir(parents=True, exist_ok=True)
+                # Missing auth settings make accidental entry observable before
+                # sign-in or persistent cache registration is possible.
+                selected.write_text(json.dumps({"PrintAccessToken": invalid}))
+                before = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+                result = run_cli(work, config, arguments)
+                output = result.stdout + result.stderr
+                assert result.returncode != 0, output
+                assert "PrintAccessToken" in result.stderr and "Boolean" in result.stderr, result.stderr
+                assert "ClientId or EntraAuth:TargetScope is missing" not in output, output
+                assert "Created default configuration" not in output, output
+                assert "Access token:" not in output, output
+                assert_before_authentication(result)
+                after = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+                assert after == before, "Invalid Boolean caused configuration/token-cache writes"
+                cases += 1
+    print(f"PASS: {cases} actual CLI PrintAccessToken Boolean rejections before authentication/cache/listener startup.")
+
+
+def check_rejected_callback(settings, port_setting=None):
+    cases = 0
+    for mode in ("base", "profile", "-c", "--config"):
+        with tempfile.TemporaryDirectory(prefix="entra-callback-") as directory:
+            work = Path(directory)
+            config = work / "config"
+            if mode == "base":
+                selected = config / "entraauthproxy.json"
+                arguments = []
+            elif mode == "profile":
+                selected = config / "work" / "entraauthproxy.json"
+                arguments = ["--profile", "work"]
+            else:
+                selected = work / "explicit.json"
+                arguments = [mode, str(selected)]
+            selected.parent.mkdir(parents=True, exist_ok=True)
+            # Missing authentication settings expose any accidental entry without
+            # attempting sign-in or opening a persistent token cache.
+            selected.write_text(json.dumps(settings))
+            before = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+            result = run_cli(work, config, arguments)
+            output = result.stdout + result.stderr
+            assert result.returncode != 0, output
+            assert "RedirectPath" in result.stderr, result.stderr
+            if port_setting:
+                assert f"from {port_setting}:" in result.stderr, result.stderr
+                assert "1 through 65535" in result.stderr and "excluding 80" in result.stderr, result.stderr
+            assert "ClientId or EntraAuth:TargetScope is missing" not in output, output
+            assert "Created default configuration" not in output, output
+            assert_before_authentication(result)
+            after = {path: path.read_bytes() for path in work.rglob("*") if path.is_file()}
+            assert after == before, "Invalid callback caused configuration/token-cache writes"
+            cases += 1
+    return cases
+
+
 if __name__ == "__main__":
     check_cli()
     check_reserved_headers()
     check_logging_overrides()
+    check_redirect_paths()
+    check_redirect_ports()
+    check_callback_encodings()
+    check_print_access_token()

@@ -13,8 +13,12 @@ from verify_cli import (
     LOGGING_LEVELS,
     LOGGING_VARIABLES,
     assert_before_authentication,
+    check_callback_encodings,
     check_cli,
     check_logging_overrides,
+    check_print_access_token,
+    check_redirect_paths,
+    check_redirect_ports,
     check_reserved_headers,
     run_cli,
 )
@@ -22,13 +26,23 @@ from verify_cli import (
 root = Path(__file__).resolve().parents[1]
 sample = json.loads((root / "sample-entraauthproxy.json").read_text())
 assert sample["Headers"] == {}, "Starter sample must add no custom headers by default"
+assert sample["RedirectPath"] == "/", "Starter sample must retain the root callback path"
+assert sample["PrintAccessToken"] is False, "Starter sample must disable full access-token output"
 readme = (root / "README.md").read_text()
 examples = re.findall(r"```json\n(.*?)\n```", readme, re.S)
 assert examples, "Expected maintained README JSON examples"
 parsed_examples = []
 for example in examples:
     parsed_examples.append(json.loads(example if example.lstrip().startswith("{") else "{" + example + "}"))
-assert any("EntraAuth" in example for example in parsed_examples), "Expected setup example"
+setup_examples = [example for example in parsed_examples if "EntraAuth" in example]
+assert setup_examples, "Expected complete setup example"
+for example in setup_examples:
+    assert set(example) == set(sample), "Complete setup example must include the maintained sample settings"
+    assert example["RedirectPath"] == sample["RedirectPath"], "Setup example must retain the root callback path"
+    assert example["PrintAccessToken"] is False, "Setup example must disable full access-token output"
+assert {"RedirectPort": 5000, "RedirectPath": "/auth/callback"} in parsed_examples, "Expected the custom callback fragment covered by the production MSAL assertions"
+assert "`http://localhost:5000/auth/callback`" in readme, "Custom callback example must document its resulting redirect URI"
+assert {"PrintAccessToken": True} in parsed_examples, "Expected an explicit token-output opt-in example"
 assert any("ReverseProxy" in example for example in parsed_examples), "Expected routing example"
 header_examples = [example["Headers"] for example in parsed_examples if "Headers" in example]
 assert any(len(headers) >= 2 for headers in header_examples), "Expected a useful multiple-header example"
@@ -50,6 +64,10 @@ for example in logging_examples:
 check_cli()
 check_reserved_headers()
 check_logging_overrides()
+check_redirect_paths()
+check_redirect_ports()
+check_callback_encodings()
+check_print_access_token()
 
 with tempfile.TemporaryDirectory(prefix="entra-starter-") as directory:
     work = Path(directory)
@@ -94,5 +112,5 @@ for name in set(files) - {""}:
     if path.is_file() and pattern.search(path.read_text()):
         assert name in allowed, f"Unexpected removal reference: {name}"
         matched.add(name)
-print(f"PASS: sample, {len(examples)} README JSON examples, logging shell example, isolated default/ASCII/Unicode profile starters, pre-authentication exit, maintained-file audit.")
+print(f"PASS: callback/token sample defaults, {len(examples)} README JSON examples, logging shell example, isolated matching default/ASCII/Unicode profile starters, pre-authentication exit, maintained-file audit.")
 print("Allowed negative-test matches: " + ", ".join(sorted(matched)))

@@ -22,29 +22,40 @@ public class TokenRefreshService : BackgroundService
         if (string.IsNullOrEmpty(_targetScope))
             return;
 
-        var scopes = new[] { _targetScope };
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
+            await RefreshTokenAsync(stoppingToken);
+    }
+
+    /// <summary>
+    /// Runs one background acquisition and publishes only a successful result.
+    /// The optional acquisition stand-in permits credential-free checks of the
+    /// production publication and failure boundary without waiting for a timer.
+    /// </summary>
+    internal async Task RefreshTokenAsync(CancellationToken stoppingToken,
+        Func<CancellationToken, Task<AuthenticationResult?>>? acquire = null)
+    {
+        try
         {
-            try
-            {
-                var accounts = await _app.GetAccountsAsync();
-                var firstAccount = accounts.FirstOrDefault();
-                if (firstAccount != null)
-                {
-                    var result = await _app.AcquireTokenSilent(scopes, firstAccount).ExecuteAsync(stoppingToken);
-                    _tokenProvider.SetToken(result.AccessToken);
-                }
-            }
-            catch (MsalUiRequiredException)
-            {
-                // Background service cannot easily prompt interactively.
-            }
-            catch (Exception)
-            {
-                // Ignore transient errors and try again next tick
-            }
+            var result = await (acquire ?? AcquireTokenAsync)(stoppingToken);
+            if (result != null) _tokenProvider.SetToken(result.AccessToken);
         }
+        catch (MsalUiRequiredException)
+        {
+            // Background service cannot easily prompt interactively.
+        }
+        catch (Exception)
+        {
+            // Ignore transient errors and try again next tick.
+        }
+    }
+
+    private async Task<AuthenticationResult?> AcquireTokenAsync(CancellationToken stoppingToken)
+    {
+        var accounts = await _app.GetAccountsAsync();
+        var firstAccount = accounts.FirstOrDefault();
+        return firstAccount == null ? null :
+            await _app.AcquireTokenSilent([_targetScope], firstAccount).ExecuteAsync(stoppingToken);
     }
 }

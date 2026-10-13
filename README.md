@@ -27,6 +27,8 @@ Edit `entraauthproxy.json` with your actual values:
   "Headers": {},
   "Port": 5000,
   "RedirectPort": 5000,
+  "RedirectPath": "/",
+  "PrintAccessToken": false,
   "DangerousAcceptAnyServerCertificate": false,
   "ForceInteractiveAuthentication": false
 }
@@ -62,10 +64,10 @@ CLI / IDE ──HTTP──> Kestrel + YARP ──Bearer token──> Upstream AP
              Entra ID / persistent token cache
 ```
 
-1. **Load configuration.** The application reads its JSON settings, validates and captures logging overrides and optional custom request headers, sets the listening port, and configures console logging.
+1. **Load configuration.** The application reads its JSON settings, validates and captures logging overrides, optional custom request headers, callback settings, and the token-output flag, sets the listening port, and configures console logging.
 2. **Authenticate before accepting traffic.** MSAL builds a public client for the configured tenant and client ID. It first tries silent authentication using the first cached account. If user interaction is required, it opens a browser. Forced interactive sign-in skips the silent attempt. Kestrel starts only after authentication succeeds.
 3. **Persist the session.** MSAL Extensions registers a persistent token cache using OS-protected storage: Windows protection, macOS Keychain, or Linux Keyring. Cache persistence is verified during startup. The cache name contains a SHA-256 hash of the tenant ID, client ID, and target scope, separating those authentication configurations.
-4. **Keep a token ready.** The singleton `TokenProvider` stores the access token with `Volatile.Read` and `Volatile.Write`, allowing concurrent requests to read the current token without an explicit lock.
+4. **Keep a token ready.** The singleton `TokenProvider` stores the access token with `Volatile.Read` and `Volatile.Write`, allowing concurrent requests to read the current token without an explicit lock. Publications serialize token changes and any explicitly enabled console output.
 5. **Refresh in the background.** `TokenRefreshService` calls MSAL's `AcquireTokenSilent` every 30 seconds and updates the token when successful. MSAL decides whether to reuse its cached token or obtain a new one; the proxy does not implement its own expiry threshold. Individual proxied requests do not initiate authentication.
 6. **Forward requests.** YARP's default catch-all route forwards requests to `TargetAddress`. A request transform replaces `Authorization` with `Bearer <access-token>` and applies any configured static request headers on every route.
 
@@ -88,12 +90,13 @@ Package versions are centrally declared in `Directory.Packages.props`.
 | --- | --- |
 | `EntraAuthProxy/Program.cs` | CLI validation and application host setup |
 | `EntraAuthProxy/ConfigurationLocations.cs` | Shared base, profile, explicit-file, and local lookup paths |
-| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, logging/header capture before authentication, and the cache-directory boundary |
+| `EntraAuthProxy/StartupConfiguration.cs` | JSON loading, overlays, starter generation, startup settings capture before authentication, and the cache-directory boundary |
+| `EntraAuthProxy/CallbackSettings.cs` | Callback path/selected-port validation and captured MSAL redirect construction |
 | `EntraAuthProxy/StartupLogging.cs` | Selected environment-variable validation and captured startup logging thresholds |
 | `EntraAuthProxy/CustomRequestHeaders.cs` | Shared loading and reserved-header validation for an immutable startup header map |
 | `EntraAuthProxy/ProxyExtensions.cs` | Generated YARP route, custom configuration overlays, and bearer-token/static-header transform |
 | `EntraAuthProxy/AuthExtensions.cs` | MSAL client creation, secure cache registration, and startup sign-in |
-| `EntraAuthProxy/TokenProvider.cs` | Shared in-memory access token |
+| `EntraAuthProxy/TokenProvider.cs` | Shared in-memory access token and optional output on changed publication |
 | `EntraAuthProxy/TokenRefreshService.cs` | Periodic silent token acquisition |
 | `sample-entraauthproxy.json` | Starter configuration |
 
@@ -134,7 +137,9 @@ The token cache always uses the **base directory**: the effective `ENTRAAUTHPROX
 | `TargetAddress` | Upstream base URL for the generated catch-all route. |
 | `Headers` | Optional flat object of header names and single static string values, applied to every outgoing proxied request. Omitted or `{}` adds no headers; `Authorization` is reserved in every capitalization. |
 | `Port` | Proxy HTTP listening port; the sample uses `5000`. Binds all interfaces. |
-| `RedirectPort` | Local browser sign-in callback port. Falls back to `Port` when omitted. |
+| `RedirectPort` | Local browser sign-in callback port. Falls back to `Port` only when omitted or null; see callback rules below. |
+| `RedirectPath` | Local browser callback URI path; omitted, null, or `/` retains the root path. Custom paths require a fixed effective callback port. |
+| `PrintAccessToken` | Opt-in full MSAL access-token output to stdout; omitted, null, or `false` disables it. |
 | `DangerousAcceptAnyServerCertificate` | Disables upstream TLS certificate validation when `true`; leave `false` for normal use. |
 | `ForceInteractiveAuthentication` | Forces browser authentication at startup when `true`. |
 | `ReverseProxy` | Optional YARP configuration layered over the generated routes and clusters. |
@@ -142,6 +147,45 @@ The token cache always uses the **base directory**: the effective `ENTRAAUTHPROX
 `ENTRAAUTHPROXY_FORCE_INTERACTIVE` overrides `ForceInteractiveAuthentication` when present: only the value `true` (case-insensitive) enables it; any other value disables it.
 
 `Port` and `RedirectPort` can be equal because startup authentication happens before Kestrel begins listening. Ensure the callback port is available during sign-in. Although JSON files are loaded with change watching enabled, several values are captured during startup; restart after configuration changes to apply them consistently.
+
+### Browser callback path
+
+`RedirectPath` accepts a URI path beginning with a single `/`, such as `/auth/callback` or `/Auth/Callback/`. Case and an intentional trailing slash are preserved. Omission, null, and explicit `/` all use the root callback. The scheme and hostname remain `http://localhost`.
+
+Empty strings, paths without a leading slash (`auth/callback`), full URLs, authority-style `//...` values, query strings, fragments, backslashes, whitespace/control characters, and objects or arrays are invalid. Paths that URI construction would alter, such as `/a/../callback`, `/café`, or malformed percent escapes, are also rejected. The application does not trim, prefix, or repair the path. Invalid values stop startup with a `RedirectPath` diagnostic before browser sign-in, persistent token-cache access, or listener startup.
+
+The effective callback port is selected with `RedirectPort ?? Port`: only omission or null permits `Port` fallback. An explicitly empty or unparseable `RedirectPort` never falls back to `Port`. A custom path requires that selected value to parse as a fixed integer from **1 through 65535, excluding 80**. Missing, empty, unparseable, out-of-range, 0, and 80 effective ports fail before authentication/cache/listener startup; the error names `RedirectPath` and the selected port setting. MSAL selects an automatic port and replaces the path with `/` for ports 0 and 80, so these values cannot preserve a custom path.
+
+Root callbacks retain existing behavior: a parseable selected port configures `http://localhost:<port>`, while a missing, empty, or unparseable selected value uses [MSAL's default `http://localhost` redirect](https://learn.microsoft.com/en-us/entra/msal/dotnet/how-to/default-reply-uri). MSAL retains its automatic-port behavior for root callbacks, including ports 0 and 80. The fixed-port restriction applies only to custom paths.
+
+Merge this fragment into the setup configuration:
+
+```json
+{
+  "RedirectPort": 5000,
+  "RedirectPath": "/auth/callback"
+}
+```
+
+The resulting callback is `http://localhost:5000/auth/callback`. Omitting or nulling `RedirectPort` with `Port: 5000` produces the same URI. Register the corresponding loopback redirect path on the Entra public-client application under **Mobile and desktop applications**. [Microsoft's redirect URI guidance](https://learn.microsoft.com/en-us/entra/identity-platform/reply-url) requires matching path case and ignores the port when matching localhost registrations. For a root callback, the registration can be `http://localhost:5000` without the trailing `/`; this is separate from the application's rule that a configured `RedirectPath` must begin with `/`. Preserve any intentional trailing slash on a custom path in the registration.
+
+MSAL handles browser launch and the callback; this setting does not add a proxy route. Existing JSON selection and eligible local overlays apply. The effective callback settings are captured before authentication and remain fixed across watched JSON reloads; restart the proxy to apply edits.
+
+### Access-token console output
+
+`PrintAccessToken` defaults to `false`; omission, null, and explicit `false` produce no token output. To enable it, merge this fragment into your configuration:
+
+```json
+{
+  "PrintAccessToken": true
+}
+```
+
+This prints the **complete bearer credential** to standard output with the label `Access token: `. Anyone with the token can use it within its granted access; console capture therefore contains a credential. The token is the MSAL access token used by the proxy, independent of an incoming caller's Authorization header.
+
+The first non-empty token prints after successful startup authentication, whether silent or interactive. Each different non-empty token published by successful background refresh also prints. Token strings are compared exactly with the currently published value: unchanged refresh tokens, failed acquisitions, missing tokens, and reads while forwarding requests produce no additional output. Token publication and forwarding continue normally when printing is disabled.
+
+Output is an explicit console write, independent of logging thresholds, so even `ENTRAAUTHPROXY_LOG_LEVEL=None` does not suppress enabled token output. Values that cannot bind to a Boolean, including objects and arrays, stop startup with a `PrintAccessToken` diagnostic before authentication or persistent cache access. Existing JSON selection and eligible local overlays apply. The flag is captured before authentication and remains fixed for the process lifetime, including across watched JSON reloads; restart to enable or disable it.
 
 ### Startup logging
 
@@ -229,7 +273,7 @@ dotnet run --project tests/ConfigurationBehaviorChecks --no-build --no-launch-pr
 python3 tests/verify_repository.py
 ```
 
-The proxy harness uses loopback proxy/upstream listeners and deterministic tokens to check routing, authorization replacement, header and payload forwarding, static-header collisions, empty/content headers, concurrency, and the startup snapshot across JSON/YARP reload and restart. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement and reserved-header/logging validation. It checks actual logger filtering and captured events, native category/provider precedence, watched JSON reloads, and fixed startup logging/header snapshots. The Python check validates CLI errors and Unicode names, pre-authentication reserved-header and logging failures, configuration and logging examples, real startup starter generation, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
+The proxy harness uses loopback proxy/upstream listeners and deterministic tokens to check routing, authorization replacement, header and payload forwarding, static-header collisions, empty/content headers, concurrency, token publication with output enabled/disabled, and the startup snapshot across JSON/YARP reload and restart. The configuration harness exercises the production resolver and loader with temporary default/environment bases, profiles, overlays, explicit files, starter creation, and a stand-in authentication boundary that checks cache placement and startup validation. It checks actual logger filtering and captured events, native category/provider precedence, callback URI construction on an actual MSAL client and the installed MSAL interactive redirect transformation, early rejection of invalid paths/ports/Booleans, synthetic token output, and fixed startup snapshots across watched JSON reloads and restart. The Python check validates CLI errors and Unicode names, pre-authentication reserved-header/logging/callback/token-setting failures, maintained examples, matching real startup starters, and the maintained-file inventory. These checks need no Entra credentials and do not change your real configuration or persistent token cache. They do not verify a tenant's redirect registration or complete live browser sign-in. Run `python3 tests/verify_cli.py` for just the CLI validation cases.
 
 Run the published executable with the same configuration option:
 

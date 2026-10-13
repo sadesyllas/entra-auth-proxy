@@ -17,7 +17,7 @@ internal static class CustomHeaderChecks
             var path = Path.Combine(workspace.WorkingDirectory, "explicit.json");
             TestWorkspace.WriteJson(path, emptyObject ? new { Headers = new Dictionary<string, string>() } : (object)new { Port = 5000 });
             using var configuration = new ConfigurationManager();
-            var startup = StartupConfiguration.Load(configuration, workspace.Resolve(explicitFile: path));
+            var startup = workspace.LoadStartup(configuration, workspace.Resolve(explicitFile: path));
             Require(startup!.Headers.Values.Count == 0, "absent / empty Headers snapshot");
             cases++;
         }
@@ -42,7 +42,7 @@ internal static class CustomHeaderChecks
             if (profile != null) WriteHeaders(Path.Combine(locations.BaseDirectory, "entraauthproxy.json"), new() { ["X-Ignored"] = "base" });
 
             using var configuration = new ConfigurationManager();
-            var startup = StartupConfiguration.Load(configuration, locations)!;
+            var startup = workspace.LoadStartup(configuration, locations)!;
             var values = startup.Headers.Values;
             var overlayApplies = environment != "environment" && !emptyOverlay;
             Require(values.Count == (overlayApplies ? 5 : 4), "key-level overlay retains unrelated entries; empty overlay does not erase");
@@ -52,7 +52,7 @@ internal static class CustomHeaderChecks
             Require(!values.ContainsKey("X-Ignored"), "profile selection excludes the unprofiled map");
             Require(values.ContainsKey("X-Local") == overlayApplies, "environment base disables local Headers");
             var authenticated = false;
-            await startup.AuthenticateAsync(new TokenProvider(), (_, _, _) =>
+            await startup.AuthenticateAsync(new TokenProvider(), (_, _, _, _) =>
             {
                 authenticated = true;
                 return Task.FromResult(authenticationResult);
@@ -75,7 +75,7 @@ internal static class CustomHeaderChecks
             WriteHeaders(Path.Combine(workspace.EnvironmentDirectory, "entraauthproxy.json"), new() { ["Authorization"] = "ignored" });
             WriteHeaders(Path.Combine(workspace.WorkingDirectory, "entraauthproxy.json"), new() { ["Authorization"] = "ignored" });
             using var configuration = new ConfigurationManager();
-            var startup = StartupConfiguration.Load(configuration, workspace.Resolve(environment: workspace.EnvironmentDirectory, explicitFile: explicitPath));
+            var startup = workspace.LoadStartup(configuration, workspace.Resolve(environment: workspace.EnvironmentDirectory, explicitFile: explicitPath));
             Require(startup!.Headers.Values.Count == 1 && startup.Headers.Values["X-Explicit"] == "exact", "explicit selection ignores global/local maps");
             cases++;
         }
@@ -92,8 +92,8 @@ internal static class CustomHeaderChecks
             var authenticated = false;
             try
             {
-                var startup = StartupConfiguration.Load(configuration, locations)!;
-                await startup.AuthenticateAsync(new TokenProvider(), (_, _, _) =>
+                var startup = workspace.LoadStartup(configuration, locations)!;
+                await startup.AuthenticateAsync(new TokenProvider(), (_, _, _, _) =>
                 {
                     authenticated = true;
                     return Task.FromResult(authenticationResult);
